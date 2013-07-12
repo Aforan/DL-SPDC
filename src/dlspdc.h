@@ -65,7 +65,7 @@ typedef struct SPDC_HDFS_File_Info_Struct {
 
 typedef struct SPDC_HDFS_Host_Chunk_Map_Struct {
 	char* hostname;
-	int chunks;
+	int* chunks;
 	int num_chunks;	
 } SPDC_HDFS_Host_Chunk_Map;
 
