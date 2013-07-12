@@ -26,7 +26,9 @@
 #define MD_LOCALITY_DIST_HOSTNAME	7
 #define MD_LOCALITY_DIST_CHUNKS		8
 #define MD_LOCALITY_DIST_DONE		9
- 
+#define SLAVE_CHECK_IN				10
+#define SLAVE_CHECK_IN_RESP			11
+
 #define REGISTERED_STATUS			0
 #define SCHEDULED_STATUS			1
 #define COMPLETED_STATUS			3
@@ -63,9 +65,14 @@ typedef struct SPDC_HDFS_File_Info_Struct {
 
 typedef struct SPDC_HDFS_Host_Chunk_Map_Struct {
 	char* hostname;
-	int* chunks;
-	int num_chunks;
+	int chunks;
+	int num_chunks;	
 } SPDC_HDFS_Host_Chunk_Map;
+
+typedef struct SPDC_Hostname_Rank_Struct {
+	char* hostname;
+	int rank;
+} SPDC_Hostname_Rank;
 
 int SPDC_Init(SPDC_Settings* set, int caller_rank, int debug_mode);
 int SPDC_Register_HDFS_Job(SPDC_HDFS_Job* job);

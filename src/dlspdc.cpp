@@ -4,6 +4,12 @@
  *	
  *	Contents: All core interface functions.
  *	Conventions: Underscore not camelcase!!!!!!!!!
+ *	
+ *	TODO:	Need to add multiple files for locality_vector.
+ *			Idea:	Have one vec per file with unique mas structs
+ 					per file
+ *
+ *
  */
 
 #ifndef DLSPDC_CPP
@@ -17,6 +23,7 @@ using namespace std;
 vector<SPDC_HDFS_Job*> *job_vector;
 vector<SPDC_HDFS_File_Info*> *file_info_vector;
 vector<SPDC_HDFS_Host_Chunk_Map*> *locality_vector;
+vector<SPDC_Hostname_Rank*> *slave_hostname_vector;
 
 /*
  *	The rank of the process that called init.  We can just
@@ -24,6 +31,10 @@ vector<SPDC_HDFS_Host_Chunk_Map*> *locality_vector;
  */
 int our_rank;
 int md_id;
+int sl_id;
+int md_rank;
+
+int* slaves;
 
 /*
  *	Debug Flag 0 by Default
@@ -206,6 +217,10 @@ int SPDC_Init_MD_Server() {
 
 	SPDC_Receive_Locality_Map();
 
+	fprintf(stdout, "DEBUG  ---  rank: %d done receiving other locality maps\n", our_rank);
+
+	SPDC_Receive_Slave_Checkins();
+
 	if(locality_vector->size() > 0 && our_rank == 1) {
 		fprintf(stdout, "Rank: %d printing locality info\n", our_rank);
 		print_locality_map(locality_vector);
@@ -214,10 +229,109 @@ int SPDC_Init_MD_Server() {
 	return 0;
 }
 
+/*		**		UNTESTED		**		*/
 int SPDC_Init_Slave() {
+	//	Sort slave ranks and get our position
+	vector<int> sorted_ranks;
+	sorted_ranks.assign(settings->slave_ranks, settings->slave_ranks + settings->num_slaves);
+	sort(sorted_ranks.begin(), sorted_ranks.end());
+	sl_id = find(sorted_ranks.begin(), sorted_ranks.end(), our_rank) - sorted_ranks.begin();
+	
+	//	Use our position to find the md index we aere asosciated with
+	md_id = sl_id % settings->num_md_servers;
+
+	//	Sort md servers and get our assosciated md rank
+	vector<int> sorted_md_ranks;
+	sorted_md_ranks.assign(settings->md_ranks, settings->md_ranks + settings->num_md_servers);
+	sort(sorted_md_ranks.begin(), sorted_md_ranks.end());
+
+	md_rank = sorted_md_ranks.at(md_id);
+
+	//	Send our hostname to owner md
+	char* hostname = (char*) calloc(MAX_HOSTNAME_SIZE, sizeof(char));
+	gethostname(hostname, MAX_HOSTNAME_SIZE);
+
+	MPI_Send(	hostname,
+				strlen(hostname),
+				MPI_CHAR,
+				md_rank,
+				SLAVE_CHECK_IN,
+				settings->comm_group);
+
+	int dummy;
+	MPI_Status status;
+
+	MPI_Recv(	&dummy,
+				1,
+				MPI_INT,
+				md_rank,
+				SLAVE_CHECK_IN_RESP,
+				settings->comm_group,
+				&status);
+
 	return 0;
 }
+/*		**		UNTESTED		**		*/
 
+
+/*		**		UNTESTED		**		*/
+void SPDC_Receive_Slave_Checkins() {
+	int num_slaves = settings->num_slaves / settings->num_md_servers;
+
+	//	If this is the last md and there is an uneven distribution we'll take it
+	if(	md_id == settings->num_md_servers - 1 && 
+		settings->num_slaves % settings->num_md_servers) num_slaves++;
+
+	//	Sort slaves
+	vector<int> sorted_slaves;
+	sorted_slaves.assign(settings->slave_ranks, settings->slave_ranks + settings->num_slaves);
+	sort(sorted_slaves.begin(), sorted_slaves.end());
+
+	//	Calculate start and allocate mem for slaves array
+	int start = md_id * num_slaves;
+	slaves = (int*) calloc(num_slaves, sizeof(int));
+	
+	//	Copy into slaves array
+	memcpy(slaves, sorted_slaves.data()+start, sizeof(int)*num_slaves);
+
+	slave_hostname_vector = new vector<SPDC_Hostname_Rank*>;
+
+	int num_done = 0;
+	char recv_hostname[MAX_HOSTNAME_SIZE];
+	MPI_Status status;
+	while (num_done < num_slaves) {
+		SPDC_Hostname_Rank* new_hnr;
+
+		//	Receive a hostname
+		MPI_Recv(	recv_hostname,
+					MAX_HOSTNAME_SIZE,
+					MPI_CHAR,
+					MPI_ANY_SOURCE,
+					SLAVE_CHECK_IN,
+					settings->comm_group,
+					&status);
+
+		//	Allocate memory for struct and name
+		new_hnr = (SPDC_Hostname_Rank*) calloc(1, sizeof(SPDC_Hostname_Rank));
+		new_hnr->hostname = (char*) calloc(strlen(recv_hostname), sizeof(char));
+
+		//	Copy hostname and rank
+		memcpy(new_hnr, recv_hostname, strlen(recv_hostname)*sizeof(char));
+		new_hnr->rank = status.MPI_SOURCE;
+
+		slave_hostname_vector->push_back(new_hnr);
+
+		MPI_Send(	&num_done,
+					1,
+					MPI_INT,
+					status.MPI_SOURCE,
+					SLAVE_CHECK_IN_RESP,
+					settings->comm_group);
+
+		num_done++;
+	}
+}
+/*		**		UNTESTED		**		*/
 
 int SPDC_Build_Initial_Jobs() {
 	MPI_Status status;
