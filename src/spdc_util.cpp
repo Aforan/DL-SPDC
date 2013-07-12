@@ -58,6 +58,13 @@ void print_job(SPDC_HDFS_Job* job) {
 						job->start_offset,
 						job->length);
 
+	fprintf(stdout, "\tchunks:");
+
+	for(int i = 0; i < job->num_included_chunks; i++) {
+		fprintf(stdout, " %d,", job->included_chunks[i]);
+	}
+
+	fprintf(stdout, "\n");
 }
 
 
@@ -107,6 +114,44 @@ void print_locality_map_elem(SPDC_HDFS_Host_Chunk_Map* e) {
 	}
 
 	fprintf(stdout, "\n");
+}
+
+void print_slave_hostname(vector<SPDC_Hostname_Rank*> *vec) {
+	for(uint i = 0; i < vec->size(); i++) {
+		fprintf(stdout, "\t%d:\t%s\n", vec->at(i)->rank, vec->at(i)->hostname);
+	}
+}
+
+void print_jobs(vector<SPDC_HDFS_Job*> *vec) {
+	for(uint i = 0; i < vec->size(); i++) {
+		print_job(vec->at(i));
+	}
+}
+
+void print_slave_info(SPDC_HDFS_Slave_Info* slave) {
+	fprintf(stdout, "\t***local chunks: ");
+
+	for(int i = 0; i < slave->num_chunks; i++) {
+		fprintf(stdout, " %d", slave->chunks[i]);
+	}
+
+	fprintf(stdout, "\n");
+}
+
+int get_rank_from_hostname(char* hostname, vector<SPDC_Hostname_Rank*> *vec) {
+	for(uint i = 0; i < vec->size(); i++) {
+		if(!strcmp(vec->at(i)->hostname, hostname)) return vec->at(i)->rank;
+	}
+
+	return -1;
+}
+
+SPDC_HDFS_Host_Chunk_Map* get_chunk_map_from_rank(int rank, vector<SPDC_HDFS_Host_Chunk_Map*> *vec) {
+	for(uint i = 0; i < vec->size(); i++) {
+		if(vec->at(i)->rank == rank) return vec->at(i);
+	}
+
+	return NULL;
 }
 
 #endif

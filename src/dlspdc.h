@@ -26,8 +26,17 @@
 #define MD_LOCALITY_DIST_HOSTNAME	7
 #define MD_LOCALITY_DIST_CHUNKS		8
 #define MD_LOCALITY_DIST_DONE		9
-#define SLAVE_CHECK_IN				10
-#define SLAVE_CHECK_IN_RESP			11
+#define MD_LOCALITY_DIST_MORE		10
+#define SLAVE_CHECK_IN_BEGIN		11
+#define SLAVE_CHECK_IN				12
+#define SLAVE_CHECK_IN_RESP			13
+#define MD_SLAVE_ASS_DIST			14
+#define MD_SLAVE_ASS_DIST_HOSTNAME	15
+#define MD_SLAVE_ASS_DIST_MORE		16
+#define MD_SLAVE_ASS_DIST_DONE		17
+#define SLAVE_INIT_NUM_CHUNKS		18
+#define SLAVE_INIT_LOC_CHUNKS		19
+#define SLAVE_INIT_CHUNKS_NONE		20
 
 #define REGISTERED_STATUS			0
 #define SCHEDULED_STATUS			1
@@ -53,7 +62,9 @@ typedef struct SPDC_HDFS_Job_Struct {
 	char* filename;
 	int filename_length;
 	uint64_t start_offset;
-	uint64_t length;	
+	uint64_t length;
+	int* included_chunks;
+	int num_included_chunks;
 } SPDC_HDFS_Job;
 
 typedef struct SPDC_HDFS_File_Info_Struct {
@@ -66,13 +77,19 @@ typedef struct SPDC_HDFS_File_Info_Struct {
 typedef struct SPDC_HDFS_Host_Chunk_Map_Struct {
 	char* hostname;
 	int* chunks;
-	int num_chunks;	
+	int num_chunks;
+	int rank;
 } SPDC_HDFS_Host_Chunk_Map;
 
 typedef struct SPDC_Hostname_Rank_Struct {
 	char* hostname;
 	int rank;
 } SPDC_Hostname_Rank;
+
+typedef struct SPDC_HDFS_Slave_Info_Struct{
+	int num_chunks;
+	int* chunks;
+} SPDC_HDFS_Slave_Info;
 
 int SPDC_Init(SPDC_Settings* set, int caller_rank, int debug_mode);
 int SPDC_Register_HDFS_Job(SPDC_HDFS_Job* job);
@@ -87,5 +104,10 @@ void SPDC_Debug_Print_Jobs();
 void SPDC_Build_Locality_Map();
 void SPDC_Distribute_Locality_Map();
 void SPDC_Receive_Locality_Map();
-
+void SPDC_Receive_Slave_Checkins();
+void SPDC_Receive_Slave_Checkin_Dist();
+void SPDC_Distribute_Slave_Checkins();
+void SPDC_Build_Chunk_Job_Map();
+void SPDC_Distribute_Slave_Jobs();
+void SPDC_Slave_Receive_Init_Jobs();
 #endif

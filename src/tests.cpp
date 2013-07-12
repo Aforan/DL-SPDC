@@ -13,8 +13,8 @@ int main(int argc, char** argv) {
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &nthreads);
 
-	if(nthreads != 3) {
-		fprintf(stdout, "Nthreads not 3\n");
+	if(nthreads != 7) {
+		fprintf(stdout, "Nthreads not 7\n");
 
 		MPI_Finalize();
 		return 0;
@@ -24,14 +24,21 @@ int main(int argc, char** argv) {
 	md[0] = 1;
 	md[1] = 2;
 
+	int* sr = (int*) calloc(4, sizeof(int));
+	sr[0] = 3;
+	sr[1] = 4;
+	sr[2] = 5;
+	sr[3] = 6;
+
 	SPDC_Settings* settings;
 	settings = (SPDC_Settings*) calloc(1, sizeof(SPDC_Settings));
 
 	settings->nthreads = nthreads;
 	settings->num_md_servers = 2;
-	settings->num_slaves = 0;
+	settings->num_slaves = 4;
 	settings->master_rank = 0;
 	settings->md_ranks = md;
+	settings->slave_ranks = sr;
 	settings->comm_group = MPI_COMM_WORLD;
 
 	SPDC_Init(settings, rank, 0);
@@ -48,11 +55,13 @@ int main(int argc, char** argv) {
 			working_job->tag = READ_TASK;
 			working_job->filename = filename;
 			working_job->filename_length = strlen(filename);
-			working_job->start_offset = i*10;
-			working_job->length = 10;
+			working_job->start_offset = i*1024*1024*16;
+			working_job->length = 1024*1024*10;
 
 			SPDC_Register_HDFS_Job(working_job);	
 		}
+
+		SPDC_Register_HDFS_Job(working_job);
 
 		SPDC_Finalize_Registration();
 	} else {
