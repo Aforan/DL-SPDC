@@ -44,6 +44,10 @@
 #define DEBUG_SEQ_MSG 				25
 #define DEBUG_SEQ_FINALIZE			26
 #define DEBUG_KILL_SERVER			27
+#define BEGIN_SLAVE_JOB_DIST		28
+#define SLAVE_JOB_DIST_FILENAME		29
+#define SLAVE_JOB_DIST_CHUNKS		30
+#define END_SLAVE_JOB_DIST			31
 
 #define REGISTERED_STATUS			0
 #define SCHEDULED_STATUS			1
@@ -126,5 +130,8 @@ void SPDC_Kill_Debug_Server();
 void SPDC_Send_Debug_Sequence_Message(char* msg);
 void SPDC_End_Debug_Sequence();
 void SPDC_Begin_Debug_Sequence();
+void SPDC_Slave_Init_Chunks();
+void SPDC_Send_Slave_Job(SPDC_HDFS_Job* job, int slave_rank);
+void SPDC_Distribute_Slave_Chunks();
 
 #endif

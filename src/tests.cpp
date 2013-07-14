@@ -61,13 +61,11 @@ int main(int argc, char** argv) {
 			working_job->tag = READ_TASK;
 			working_job->filename = filename;
 			working_job->filename_length = strlen(filename);
-			working_job->start_offset = i*1024*1024*16;
-			working_job->length = 1024*1024*10;
+			working_job->start_offset = 0;
+			working_job->length = 1024*1024*100;
 
 			SPDC_Register_HDFS_Job(working_job);	
 		}
-
-		SPDC_Register_HDFS_Job(working_job);
 
 		SPDC_Finalize_Registration();
 	} else {

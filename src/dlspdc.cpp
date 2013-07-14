@@ -107,7 +107,7 @@ int SPDC_Init(SPDC_Settings* set, int caller_rank) {
 				//	Initialize md server
 
 				r = SPDC_Init_MD_Server();
-				SPDC_Kill_Debug_Server();
+				//SPDC_Kill_Debug_Server();
 				done = 1;
 				break;
 			}
@@ -328,6 +328,7 @@ int SPDC_Init_Slave() {
 
 
 	SPDC_Slave_Receive_Init_Jobs();
+	SPDC_Debug_Print_Jobs();
 	return 0;
 }
 
@@ -335,9 +336,67 @@ void SPDC_Slave_Receive_Init_Jobs() {
 	MPI_Status status;
 	int dummy;
 
-	slave_info = (SPDC_HDFS_Slave_Info*) calloc(1, sizeof(SPDC_HDFS_Slave_Info));
-	//fprintf(stdout, "DEBUG  ---  rank: %d trying to receive chunks from %d\n", our_rank, md_rank);
+	SPDC_Slave_Init_Chunks();
+	
+	job_vector = new vector<SPDC_HDFS_Job*>;
 
+	while(1) {
+		MPI_Probe(	md_rank, 
+					MPI_ANY_TAG, 
+					settings->comm_group, 
+					&status);
+
+		if(status.MPI_TAG == BEGIN_SLAVE_JOB_DIST) {
+			SPDC_HDFS_Job *new_job = (SPDC_HDFS_Job*) calloc(1, sizeof(SPDC_HDFS_Job));
+
+			MPI_Recv(	new_job,
+						sizeof(SPDC_HDFS_Job),
+						MPI_BYTE,
+						md_rank,
+						BEGIN_SLAVE_JOB_DIST,
+						settings->comm_group,
+						&status);
+
+			new_job->filename = (char*) calloc(new_job->filename_length, sizeof(char));
+
+			MPI_Recv(	new_job->filename,
+						new_job->filename_length,
+						MPI_CHAR,
+						md_rank,
+						SLAVE_JOB_DIST_FILENAME,
+						settings->comm_group,
+						&status);		
+
+			new_job->included_chunks = (int*) calloc(new_job->num_included_chunks, sizeof(int));
+
+			MPI_Recv(	new_job->included_chunks,
+						new_job->num_included_chunks,
+						MPI_INT,
+						md_rank,
+						SLAVE_JOB_DIST_CHUNKS,
+						settings->comm_group,
+						&status);
+
+			job_vector->push_back(new_job);
+
+		} else if(status.MPI_TAG == END_SLAVE_JOB_DIST) {
+			MPI_Recv(	&dummy,
+						1,
+						MPI_INT,
+						md_rank,
+						END_SLAVE_JOB_DIST,
+						settings->comm_group,
+						&status);
+			break;
+		}
+	}
+}
+
+void SPDC_Slave_Init_Chunks() {
+	MPI_Status status;
+	int dummy;
+
+	slave_info = (SPDC_HDFS_Slave_Info*) calloc(1, sizeof(SPDC_HDFS_Slave_Info));
 
 	MPI_Probe(	md_rank, 
 				MPI_ANY_TAG, 
@@ -541,26 +600,61 @@ int SPDC_MD_Server() {
 	return 0;
 }
 
-void SPDC_Debug_Print_Jobs() {
-	fprintf(stdout, "MDS: %d jobs:\n", our_rank);
+void SPDC_Distribute_Slave_Jobs() {
+	int dummy;
+
+	SPDC_Distribute_Slave_Chunks();
 
 	for(uint i = 0; i < job_vector->size(); i++) {
-		print_job(job_vector->at(i));
+		for(int j = 0; j < num_slaves_resp; j++) {
+			SPDC_Send_Slave_Job(job_vector->at(i), slaves[j]);
+		}
+	}
+
+	for(int i = 0; i < num_slaves_resp; i++) {
+		MPI_Send(	&dummy,
+					1,
+					MPI_INT,
+					slaves[i],
+					END_SLAVE_JOB_DIST,
+					settings->comm_group);
 	}
 }
 
-void SPDC_Distribute_Slave_Jobs() {
+void SPDC_Send_Slave_Job(SPDC_HDFS_Job* job, int slave_rank) {
+	MPI_Send(	job,
+				sizeof(SPDC_HDFS_Job),
+				MPI_BYTE,
+				slave_rank,
+				BEGIN_SLAVE_JOB_DIST,
+				settings->comm_group);
+
+	MPI_Send(	job->filename,
+				job->filename_length,
+				MPI_CHAR,
+				slave_rank,
+				SLAVE_JOB_DIST_FILENAME,
+				settings->comm_group);
+
+	MPI_Send(	job->included_chunks,
+				job->num_included_chunks,
+				MPI_INT,
+				slave_rank,
+				SLAVE_JOB_DIST_CHUNKS,
+				settings->comm_group);
+
+}
+
+void SPDC_Distribute_Slave_Chunks() {
 	int dummy;
 
 	for(uint i = 0; i < locality_vector->size(); i++) {
 		int slave_rank = get_rank_from_hostname(locality_vector->at(i)->hostname, slave_hostname_vector);
 
 		if(slave_rank >= 0) {
-			//fprintf(stdout, "DEBUG  ---  rank: %d patched %s with rank %d\n", our_rank, locality_vector->at(i)->hostname, slave_rank);			
 			locality_vector->at(i)->rank = slave_rank;
 		}
 		else {
-			//fprintf(stdout, "DEBUG  ---  rank: %d no rank for slave %s\n", our_rank, locality_vector->at(i)->hostname);
 			continue;
 		}
 	}
@@ -569,8 +663,6 @@ void SPDC_Distribute_Slave_Jobs() {
 		SPDC_HDFS_Host_Chunk_Map* m = get_chunk_map_from_rank(slaves[i], locality_vector);
 
 		if(m == NULL) {
-			//fprintf(stdout, "DEBUG  ---  rank: %d sending no chunk msg to %d\n", our_rank, slaves[i]);
-
 			MPI_Send(	&dummy,
 						1,
 						MPI_INT,
@@ -582,9 +674,6 @@ void SPDC_Distribute_Slave_Jobs() {
 
 		int* chunks = m->chunks;
 		int num_chunks = m->num_chunks;
-
-		//fprintf(stdout, "DEBUG  ---  rank: %d sending chunks to %d\n", our_rank, slaves[i]);
-
 
 		MPI_Send(	&num_chunks,
 					1,
@@ -1124,7 +1213,7 @@ void SPDC_Debug_Server() {
 
 					char* recv_buf = (char*) calloc(message_length, sizeof(char));
 
-					MPI_Recv(	&recv_buf,
+					MPI_Recv(	recv_buf,
 								message_length,
 								MPI_CHAR,
 								status.MPI_SOURCE,
@@ -1159,6 +1248,30 @@ void SPDC_Debug_Server() {
 			break;
 		}
 	}
+}
+
+void SPDC_Debug_Print_Jobs() {
+	SPDC_Begin_Debug_Sequence();
+	char msg[200];
+	
+	sprintf(msg, "Job vector:");
+	SPDC_Send_Debug_Sequence_Message(msg);
+
+
+	for(uint i = 0; i < job_vector->size(); i++) {
+		SPDC_HDFS_Job *j = job_vector->at(i);
+		sprintf(msg, "\t%d: %s %lu %lu [", j->id, j->filename, j->start_offset, j->length);
+
+		for(int k = 0; k < j->num_included_chunks; k++) {
+			sprintf(msg+strlen(msg), "%d ", j->included_chunks[k]);
+		}
+
+		sprintf(msg+strlen(msg)-1, "]");
+
+		SPDC_Send_Debug_Sequence_Message(msg);
+	}
+
+	SPDC_End_Debug_Sequence();
 }
 
 #endif
