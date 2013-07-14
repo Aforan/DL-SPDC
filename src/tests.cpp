@@ -13,8 +13,8 @@ int main(int argc, char** argv) {
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &nthreads);
 
-	if(nthreads != 7) {
-		fprintf(stdout, "Nthreads not 7\n");
+	if(nthreads != 8) {
+		fprintf(stdout, "Nthreads not 8\n");
 
 		MPI_Finalize();
 		return 0;
@@ -40,11 +40,17 @@ int main(int argc, char** argv) {
 	settings->md_ranks = md;
 	settings->slave_ranks = sr;
 	settings->comm_group = MPI_COMM_WORLD;
+	settings->debug_mode = 1;
+	settings->debug_rank = 7;
 
-	SPDC_Init(settings, rank, 0);
+	SPDC_Init(settings, rank);
 
 	if(rank == 0) {
-		fprintf(stderr, "Registering some jobs in master\n");
+		//fprintf(stderr, "Registering some jobs in master\n");
+		char msg[200];
+		sprintf(msg, "Registering some jobs in master");
+
+		SPDC_Debug_Message(msg);
 
 		SPDC_HDFS_Job* working_job = (SPDC_HDFS_Job*) calloc(1, sizeof(SPDC_HDFS_Job));
 		char* filename = (char*) calloc(strlen(const_file), sizeof(char));

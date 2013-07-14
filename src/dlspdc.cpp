@@ -8,6 +8,8 @@
  *	TODO:	Need to add multiple files for locality_vector.
  *			Idea:	Have one vec per file with unique mas structs
  					per file
+
+ 			Should make sure all recv protected with probes.
  *
  *
  *	NEXT:	Distribute Jobs to slaves.
@@ -29,6 +31,7 @@
 
 
 using namespace std;
+
 vector<SPDC_HDFS_Job*> *job_vector;
 vector<SPDC_HDFS_File_Info*> *file_info_vector;
 vector<SPDC_HDFS_Host_Chunk_Map*> *locality_vector;
@@ -45,6 +48,7 @@ int md_rank;
 
 int num_slaves_resp;
 int* slaves;
+int debug_sequence_initialized;
 
 /*
  *	Debug Flag 0 by Default
@@ -58,12 +62,15 @@ int* slaves;
 SPDC_Settings* settings;
 
 SPDC_HDFS_Slave_Info* slave_info;
+
+FILE* debug_log = NULL;
+
 /*
  *	Everyone calls init AFTER MPI is initialized.  Init then initializes
  *	each process according to the settings, eg: slaves get SPDC_Slave_init etc.
  *	Once all processes have been initialized, control is returned to the user.
  */
-int SPDC_Init(SPDC_Settings* set, int caller_rank, int debug_mode) {
+int SPDC_Init(SPDC_Settings* set, int caller_rank) {
 
 	//	Check for null settings
 	if (set == NULL) {
@@ -77,11 +84,11 @@ int SPDC_Init(SPDC_Settings* set, int caller_rank, int debug_mode) {
 		}
 
 		settings = set;
-		our_rank = caller_rank;
-		debug_flag = debug_mode;
+		debug_sequence_initialized = 0;
 	}
 
 	int r;
+	our_rank = caller_rank;
 
 	if(our_rank == settings->master_rank) {
 		//	Initialize master rank
@@ -89,11 +96,18 @@ int SPDC_Init(SPDC_Settings* set, int caller_rank, int debug_mode) {
 	} else {
 		int i, done = 0;
 
+		if(settings->debug_mode && our_rank == settings->debug_rank) {
+			SPDC_Debug_Server_Init();
+			done = 1;
+		}
+
 		//	Check if we are a metadata server
 		for(i = 0; i < settings->num_md_servers; i++) {
 			if(our_rank == settings->md_ranks[i]) {
 				//	Initialize md server
+
 				r = SPDC_Init_MD_Server();
+				SPDC_Kill_Debug_Server();
 				done = 1;
 				break;
 			}
@@ -263,7 +277,10 @@ int SPDC_Init_MD_Server() {
 }
 
 int SPDC_Init_Slave() {
-	fprintf(stdout, "DEBUG  ---  rank: %d initializing as slave\n", our_rank);
+	//fprintf(stdout, "DEBUG  ---  rank: %d initializing as slave\n", our_rank);
+	char msg[200];
+	sprintf(msg, "Beginning slave Initialization");
+	SPDC_Debug_Message(msg);
 
 	//	Sort slave ranks and get our position
 	vector<int> sorted_ranks;
@@ -294,7 +311,9 @@ int SPDC_Init_Slave() {
 				SLAVE_CHECK_IN,
 				settings->comm_group);
 
-	fprintf(stdout, "DEBUG  ---  rank: %d sent checkin to %d\n", our_rank, md_rank);
+	//fprintf(stdout, "DEBUG  ---  rank: %d sent checkin to %d\n", our_rank, md_rank);
+	sprintf(msg, "Sent checkin to MDS %d", md_rank);
+	SPDC_Debug_Message(msg);
 
 	int dummy;
 	MPI_Status status;
@@ -948,6 +967,198 @@ void SPDC_Build_Locality_Map() {
 	}
 
 	hdfsDisconnect(fileSystem);
+}
+
+void SPDC_Begin_Debug_Sequence() {
+	int dummy;
+	
+	if(settings->debug_mode && !debug_sequence_initialized) {
+		MPI_Send(	&dummy,
+					1,
+					MPI_INT,
+					settings->debug_rank,
+					DEBUG_SEQUENCE_INIT,
+					settings->comm_group);
+
+		debug_sequence_initialized = 1;
+	}
+}
+
+void SPDC_End_Debug_Sequence() {
+	int dummy;
+	
+	if(settings->debug_mode && debug_sequence_initialized) {
+		MPI_Send(	&dummy,
+					1,
+					MPI_INT,
+					settings->debug_rank,
+					DEBUG_SEQ_FINALIZE,
+					settings->comm_group);
+
+		debug_sequence_initialized = 0;
+	}
+}
+
+void SPDC_Send_Debug_Sequence_Message(char* msg) {
+	int message_length;
+	
+	if(settings->debug_mode && debug_sequence_initialized) {
+		message_length = strlen(msg);
+
+		MPI_Send(	&message_length,
+					1,
+					MPI_INT,
+					settings->debug_rank,
+					DEBUG_SEQ_MSG_LEN,
+					settings->comm_group);
+
+		MPI_Send(	msg,
+					strlen(msg),
+					MPI_CHAR,
+					settings->debug_rank,
+					DEBUG_SEQ_MSG,
+					settings->comm_group);
+	}
+}
+
+void SPDC_Kill_Debug_Server() {
+	int dummy;
+
+	if(settings->debug_mode) {
+		MPI_Send(	&dummy,
+					1,
+					MPI_INT,
+					settings->debug_rank,
+					DEBUG_KILL_SERVER,
+					settings->comm_group);
+	}
+}
+
+void SPDC_Debug_Message(char* msg) {
+	if(settings->debug_mode) {
+		int len = strlen(msg);
+
+		MPI_Send(	&len,
+					1,
+					MPI_INT,
+					settings->debug_rank,
+					DEBUG_MESSAGE_INIT,
+					settings->comm_group);
+		
+		MPI_Send(	msg,
+					strlen(msg),
+					MPI_CHAR,
+					settings->debug_rank,
+					DEBUG_MESSAGE,
+					settings->comm_group);
+	}
+}
+
+void SPDC_Debug_Server_Init() {
+	debug_log = stderr;
+	SPDC_Debug_Server();
+}
+
+void SPDC_Debug_Server() {
+	MPI_Status status;
+	int dummy;
+
+	while(1) {
+		MPI_Probe(	MPI_ANY_SOURCE, 
+					MPI_ANY_TAG, 
+					settings->comm_group, 
+					&status);
+
+		if(status.MPI_TAG == DEBUG_MESSAGE_INIT) {
+			int message_length;
+
+			MPI_Recv(	&message_length,
+						1,
+						MPI_INT,
+						status.MPI_SOURCE,
+						DEBUG_MESSAGE_INIT,
+						settings->comm_group,
+						&status);
+
+			char* recv_buf = (char*) calloc(message_length, sizeof(char));
+
+			MPI_Recv(	recv_buf,
+						message_length,
+						MPI_CHAR,
+						status.MPI_SOURCE,
+						DEBUG_MESSAGE,
+						settings->comm_group,
+						&status);
+
+			//	Should tokenize and print line by line, but that can be done later
+
+			fprintf(debug_log, "%d:  ---  DEBUG:\t%s\n", status.MPI_SOURCE, recv_buf);
+
+			free(recv_buf);
+
+		} else if(status.MPI_TAG == DEBUG_SEQUENCE_INIT) {
+			MPI_Recv(	&dummy,
+						1,
+						MPI_INT,
+						status.MPI_SOURCE,
+						DEBUG_SEQUENCE_INIT,
+						settings->comm_group,
+						&status);
+
+			while(1) {
+				int message_length;
+
+				MPI_Probe(	status.MPI_SOURCE,
+							MPI_ANY_TAG,
+							settings->comm_group,
+							&status);
+
+				if(status.MPI_TAG == DEBUG_SEQ_MSG_LEN) {
+					MPI_Recv(	&message_length,
+								1,
+								MPI_INT,
+								status.MPI_SOURCE,
+								DEBUG_SEQ_MSG_LEN,
+								settings->comm_group,
+								&status);
+
+					char* recv_buf = (char*) calloc(message_length, sizeof(char));
+
+					MPI_Recv(	&recv_buf,
+								message_length,
+								MPI_CHAR,
+								status.MPI_SOURCE,
+								DEBUG_SEQ_MSG,
+								settings->comm_group,
+								&status);
+
+					fprintf(debug_log, "%d:  ---  DEBUG:\t%s\n", status.MPI_SOURCE, recv_buf);
+
+					free(recv_buf);
+				} else {
+					MPI_Recv(	&dummy,
+								1,
+								MPI_INT,
+								status.MPI_SOURCE,
+								DEBUG_SEQ_FINALIZE,
+								settings->comm_group,
+								&status);
+
+					break;
+				}
+			}
+		} else {
+			MPI_Recv(	&dummy,	
+						1,
+						MPI_INT,
+						status.MPI_SOURCE,
+						DEBUG_KILL_SERVER,
+						settings->comm_group,
+						&status);
+
+			break;
+		}
+	}
 }
 
 #endif

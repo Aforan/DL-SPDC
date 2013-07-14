@@ -37,6 +37,13 @@
 #define SLAVE_INIT_NUM_CHUNKS		18
 #define SLAVE_INIT_LOC_CHUNKS		19
 #define SLAVE_INIT_CHUNKS_NONE		20
+#define DEBUG_MESSAGE_INIT			21
+#define DEBUG_MESSAGE				22
+#define DEBUG_SEQUENCE_INIT			23
+#define DEBUG_SEQ_MSG_LEN			24
+#define DEBUG_SEQ_MSG 				25
+#define DEBUG_SEQ_FINALIZE			26
+#define DEBUG_KILL_SERVER			27
 
 #define REGISTERED_STATUS			0
 #define SCHEDULED_STATUS			1
@@ -52,6 +59,8 @@ typedef struct SPDC_Settings_Struct {
 	int num_slaves;
 	int num_md_servers;
 	int master_rank;
+	int debug_rank;
+	int debug_mode;
 	MPI_Comm comm_group;
 } SPDC_Settings;
 
@@ -91,7 +100,7 @@ typedef struct SPDC_HDFS_Slave_Info_Struct{
 	int* chunks;
 } SPDC_HDFS_Slave_Info;
 
-int SPDC_Init(SPDC_Settings* set, int caller_rank, int debug_mode);
+int SPDC_Init(SPDC_Settings* set, int caller_rank);
 int SPDC_Register_HDFS_Job(SPDC_HDFS_Job* job);
 int SPDC_Master_Init();
 int SPDC_Init_Slave();
@@ -110,4 +119,12 @@ void SPDC_Distribute_Slave_Checkins();
 void SPDC_Build_Chunk_Job_Map();
 void SPDC_Distribute_Slave_Jobs();
 void SPDC_Slave_Receive_Init_Jobs();
+void SPDC_Debug_Server();
+void SPDC_Debug_Server_Init();
+void SPDC_Debug_Message(char* msg);
+void SPDC_Kill_Debug_Server();
+void SPDC_Send_Debug_Sequence_Message(char* msg);
+void SPDC_End_Debug_Sequence();
+void SPDC_Begin_Debug_Sequence();
+
 #endif
