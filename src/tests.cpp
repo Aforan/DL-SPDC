@@ -54,12 +54,12 @@ int main(int argc, char** argv) {
 		char* filename = (char*) calloc(strlen(const_file), sizeof(char));
 		strcpy(filename, const_file);
 
-		for(int i = 0; i < 10; i++) {
+		for(int i = 0; i < 50; i++) {
 			working_job->id = i;
 			working_job->tag = READ_TASK;
 			working_job->filename = filename;
 			working_job->filename_length = strlen(filename);
-			working_job->start_offset = i*1024*1024*10;
+			working_job->start_offset = 5*i*1024*1024;
 			working_job->length = 1024*1024*10;
 			working_job->status = UN_ALLOCATED;
 
@@ -78,6 +78,7 @@ int main(int argc, char** argv) {
 			while((job = SPDC_Get_Next_Job()) != NULL) {	
 				sprintf(msg, "\tGot next job %d", job->id);
 				SPDC_Send_Debug_Sequence_Message(msg);
+				usleep(1000*10);
 			}
 			sprintf(msg, "Ending jobs");
 			SPDC_Send_Debug_Sequence_Message(msg);

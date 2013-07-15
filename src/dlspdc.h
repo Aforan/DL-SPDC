@@ -50,6 +50,8 @@
 #define END_SLAVE_JOB_DIST			31
 #define IS_JOB_AVAILABLE			32
 #define JOB_REQUEST_RESPONSE		33
+#define JOB_REQUEST_RESOLUTION		34
+#define JOB_REQUEST_RESOLUTION_FINISHED 35
 
 #define REGISTERED_STATUS			0
 #define SCHEDULED_STATUS			1
@@ -109,6 +111,12 @@ typedef struct SPDC_HDFS_Slave_Info_Struct{
 	int* chunks;
 } SPDC_HDFS_Slave_Info;
 
+typedef struct SPDC_HDFS_Job_Request_Struct{
+	int requester;
+	int job_id;
+	int status;
+} SPDC_HDFS_Job_Request;
+
 int SPDC_Init(SPDC_Settings* set, int caller_rank);
 int SPDC_Register_HDFS_Job(SPDC_HDFS_Job* job);
 int SPDC_Master_Init();
@@ -139,6 +147,11 @@ void SPDC_Slave_Init_Chunks();
 void SPDC_Send_Slave_Job(SPDC_HDFS_Job* job, int slave_rank);
 void SPDC_Distribute_Slave_Chunks();
 void SPDC_Slave_Sort_Jobs();
+void SPDC_Resolve_Request(SPDC_HDFS_Job_Request recv_reququest);
+void SPDC_Receive_Request_Resolution();
+void SPDC_Send_Request_Resolutions();
+void SPDC_Send_Request_Response();
+void SPDC_Receive_Job_Requests();
 
 bool SPDC_Compare_Job(const SPDC_HDFS_Job *a, const SPDC_HDFS_Job *b);
 SPDC_HDFS_Job* SPDC_Get_Next_Job();

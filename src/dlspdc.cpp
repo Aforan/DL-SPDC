@@ -37,6 +37,7 @@ vector<SPDC_HDFS_Job*> *done_jobs;
 vector<SPDC_HDFS_File_Info*> *file_info_vector;
 vector<SPDC_HDFS_Host_Chunk_Map*> *locality_vector;
 vector<SPDC_Hostname_Rank*> *slave_hostname_vector;
+vector<SPDC_HDFS_Job_Request*> *request_queue;
 
 /*
  *	The rank of the process that called init.  We can just
@@ -607,16 +608,195 @@ int SPDC_Build_Initial_Jobs() {
 }
 
 int SPDC_MD_Server() {
-	MPI_Status status;
-	char msg[200];
+	request_queue = new vector<SPDC_HDFS_Job_Request*>;
 
 	while(1) {
-		MPI_Probe(	MPI_ANY_SOURCE,
-					MPI_ANY_TAG,
+		SPDC_Receive_Job_Requests();
+		SPDC_Send_Request_Resolutions();
+		SPDC_Receive_Request_Resolution();
+		SPDC_Send_Request_Response();
+	}
+}
+
+void SPDC_Send_Request_Response() {
+	int dummy;
+	while(request_queue->size() > 0) {
+		SPDC_HDFS_Job_Request* request = request_queue->back();
+		request_queue->pop_back();
+
+		dummy = 1;
+
+		if(job_vector->at(request->job_id)->status == UN_ALLOCATED) {
+			
+			//char msg[200];
+			//sprintf(msg, "Sending good response to slave %d for job %d", request->requester, request->job_id);
+			//SPDC_Debug_Message(msg);
+
+			MPI_Send(	&dummy,
+						1,
+						MPI_INT,
+						request->requester,
+						JOB_REQUEST_RESPONSE,
+						settings->comm_group);
+			job_vector->at(request->job_id)->status = ALLOCATED;
+		} else {
+			dummy = 0;
+			
+			//char msg[200];
+			//sprintf(msg, "Sending bad response to slave %d for job %d, already allocated", request->requester, request->job_id);
+			//SPDC_Debug_Message(msg);
+			
+			MPI_Send(	&dummy,
+						1,
+						MPI_INT,
+						request->requester,
+						JOB_REQUEST_RESPONSE,
+						settings->comm_group);			
+		}
+
+	}
+}
+
+void SPDC_Send_Request_Resolutions() {
+	for(uint i = 0; i < request_queue->size(); i++) {
+		SPDC_HDFS_Job_Request* request = request_queue->at(i);
+
+		for(int j = 0; j < settings->num_md_servers; j++) {
+			
+			if(settings->md_ranks[j] != our_rank) {
+				//char msg[200];
+				//sprintf(msg, "Sending Request Resolution to md server %d for job %d", settings->md_ranks[j], request->job_id);
+				//SPDC_Debug_Message(msg);
+
+				MPI_Send(	request,
+							sizeof(SPDC_HDFS_Job_Request),
+							MPI_BYTE,					
+							settings->md_ranks[j],
+							JOB_REQUEST_RESOLUTION,
+							settings->comm_group);
+			}
+		}
+	}
+
+	for(int j = 0; j < settings->num_md_servers; j++) {
+		int dummy;
+		if(settings->md_ranks[j] != our_rank) {
+			MPI_Send(	&dummy,
+						1,
+						MPI_INT,
+						settings->md_ranks[j],
+						JOB_REQUEST_RESOLUTION_FINISHED,
+						settings->comm_group);
+		}
+	}
+}
+
+void SPDC_Receive_Request_Resolution() {
+	MPI_Status status;
+
+	for(int i = 0; i < settings->num_md_servers; i++) {
+		if(settings->md_ranks[i] != our_rank) {
+			while(1) {
+				MPI_Probe(	settings->md_ranks[i],
+							MPI_ANY_TAG,
+							settings->comm_group,
+							&status);
+
+				if(status.MPI_TAG == JOB_REQUEST_RESOLUTION) {
+					SPDC_HDFS_Job_Request recv_request;
+					MPI_Recv(	&recv_request,
+								sizeof(SPDC_HDFS_Job_Request),
+								MPI_BYTE,
+								settings->md_ranks[i],
+								JOB_REQUEST_RESOLUTION,
+								settings->comm_group,
+								&status);
+
+					//char msg[200];
+					//sprintf(msg, "Received Request resolution for job %d from md server %d", recv_request.job_id, settings->md_ranks[i]);
+					//SPDC_Debug_Message(msg);
+
+					SPDC_Resolve_Request(recv_request);
+
+				} else {
+					int dummy;
+					MPI_Recv(	&dummy,
+								1,
+								MPI_INT,
+								settings->md_ranks[i],
+								JOB_REQUEST_RESOLUTION_FINISHED,
+								settings->comm_group,
+								&status);					
+					break;
+				}
+			}
+		}
+	}
+}
+
+void SPDC_Resolve_Request(SPDC_HDFS_Job_Request recv_request) {
+	vector<SPDC_HDFS_Job_Request*> remove_vector;
+	int found = 0;
+
+	for(uint i = 0; i < request_queue->size(); i++) {
+		//	If we find a matching request
+		if(recv_request.job_id == request_queue->at(i)->job_id) {
+			//char msg[200];
+
+			//sprintf(msg, "Found conflict from slave %d for job %d", recv_request.requester, recv_request.job_id);
+			//SPDC_Debug_Message(msg);
+
+			//	If we should not get the job remove it from our request queue and set status to allocated
+			if(recv_request.job_id % settings->num_md_servers != md_id) {
+				//sprintf(msg, "Slave %d Not getting job %d", recv_request.requester, recv_request.job_id);
+				//SPDC_Debug_Message(msg);
+				
+				job_vector->at(request_queue->at(i)->job_id)->status = ALLOCATED;
+				remove_vector.push_back(request_queue->at(i));
+			}
+
+			found = 1;
+			break;
+		}
+	}
+
+	//	If we did not find it, set to allocated
+	if(!found) {
+		job_vector->at(recv_request.job_id)->status = ALLOCATED;
+	}
+
+	for(uint i = 0; i < remove_vector.size(); i++) {
+		SPDC_HDFS_Job_Request *request = remove_vector.at(i);
+		int dummy = 0;
+		//char msg[200];
+		//sprintf(msg, "Conflicting request from slave %d for job %d", request->requester, request->job_id);
+		//SPDC_Debug_Message(msg);
+
+		MPI_Send(	&dummy,
+					1,
+					MPI_INT,
+					request->requester,
+					JOB_REQUEST_RESPONSE,
+					settings->comm_group);
+
+		remove(request_queue->begin(), request_queue->end(), remove_vector.at(i));
+		free(remove_vector.at(i));
+	}
+}
+
+void SPDC_Receive_Job_Requests() {
+	MPI_Status status;
+	int flag;
+
+	while(1) {
+
+		MPI_Iprobe(	MPI_ANY_SOURCE,
+					IS_JOB_AVAILABLE,
 					settings->comm_group,
+					&flag,
 					&status);
 	
-		if(status.MPI_TAG == IS_JOB_AVAILABLE) {
+		if(flag) {
 			uint id;
 
 			MPI_Recv(	&id,
@@ -628,19 +808,23 @@ int SPDC_MD_Server() {
 						&status);
 
 			if(job_vector->size() > id && (job_vector->at(id)->status == UN_ALLOCATED)) {
-				int r = 1;
+				SPDC_HDFS_Job_Request* request = (SPDC_HDFS_Job_Request*) calloc(1, sizeof(SPDC_HDFS_Job_Request));
+				request->requester = status.MPI_SOURCE;
+				request->job_id = id;
+				request->status = UN_ALLOCATED;
 
-				MPI_Send(	&r,
-							1,
-							MPI_INT,
-							status.MPI_SOURCE,
-							JOB_REQUEST_RESPONSE,
-							settings->comm_group);
+				request_queue->push_back(request);
 
-				job_vector->at(id)->status = ALLOCATED;
+				//char msg[200];
+				//sprintf(msg, "Received valid request for job %d from slave %d", request->job_id, request->requester);
+				//SPDC_Debug_Message(msg);
 
 			} else {
 				int r = 0;
+				
+				//char msg[200];
+				//sprintf(msg, "Received valid request for job %d from slave %d, but job already allocated", id, status.MPI_SOURCE);
+				//SPDC_Debug_Message(msg);
 
 				MPI_Send(	&r,
 							1,
@@ -649,7 +833,10 @@ int SPDC_MD_Server() {
 							JOB_REQUEST_RESPONSE,
 							settings->comm_group);
 			}
-		} 
+			
+		} else {
+			break;
+		}
 	}
 }
 
