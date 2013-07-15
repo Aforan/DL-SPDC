@@ -46,10 +46,8 @@ int main(int argc, char** argv) {
 	SPDC_Init(settings, rank);
 
 	if(rank == 0) {
-		//fprintf(stderr, "Registering some jobs in master\n");
 		char msg[200];
 		sprintf(msg, "Registering some jobs in master");
-
 		SPDC_Debug_Message(msg);
 
 		SPDC_HDFS_Job* working_job = (SPDC_HDFS_Job*) calloc(1, sizeof(SPDC_HDFS_Job));
@@ -61,19 +59,33 @@ int main(int argc, char** argv) {
 			working_job->tag = READ_TASK;
 			working_job->filename = filename;
 			working_job->filename_length = strlen(filename);
-			working_job->start_offset = 0;
-			working_job->length = 1024*1024*100;
+			working_job->start_offset = i*1024*1024*10;
+			working_job->length = 1024*1024*10;
+			working_job->status = UN_ALLOCATED;
 
 			SPDC_Register_HDFS_Job(working_job);	
 		}
 
 		SPDC_Finalize_Registration();
 	} else {
-		//if(rank == 1)
-		//	SPDC_Debug_Print_Jobs();
+		if(rank == 3 || rank == 4 || rank == 5 || rank == 6) {
+			SPDC_HDFS_Job* job;
+			char msg[200];
+
+			SPDC_Begin_Debug_Sequence();
+			sprintf(msg, "Beginning Jobs");
+			SPDC_Send_Debug_Sequence_Message(msg);
+			while((job = SPDC_Get_Next_Job()) != NULL) {	
+				sprintf(msg, "\tGot next job %d", job->id);
+				SPDC_Send_Debug_Sequence_Message(msg);
+			}
+			sprintf(msg, "Ending jobs");
+			SPDC_Send_Debug_Sequence_Message(msg);
+			SPDC_End_Debug_Sequence();
+		}
 	}
 
-	fprintf(stderr, "Rank: %d done\n", rank);
+	//fprintf(stderr, "Rank: %d done\n", rank);
 
 	MPI_Finalize();
 	return 0;

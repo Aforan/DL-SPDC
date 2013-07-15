@@ -48,6 +48,8 @@
 #define SLAVE_JOB_DIST_FILENAME		29
 #define SLAVE_JOB_DIST_CHUNKS		30
 #define END_SLAVE_JOB_DIST			31
+#define IS_JOB_AVAILABLE			32
+#define JOB_REQUEST_RESPONSE		33
 
 #define REGISTERED_STATUS			0
 #define SCHEDULED_STATUS			1
@@ -55,6 +57,9 @@
 
 #define MAX_FILENAME_SIZE			512
 #define MAX_HOSTNAME_SIZE			256
+
+#define UN_ALLOCATED				0
+#define ALLOCATED 					1
 
 typedef struct SPDC_Settings_Struct {
 	int nthreads;
@@ -133,5 +138,9 @@ void SPDC_Begin_Debug_Sequence();
 void SPDC_Slave_Init_Chunks();
 void SPDC_Send_Slave_Job(SPDC_HDFS_Job* job, int slave_rank);
 void SPDC_Distribute_Slave_Chunks();
+void SPDC_Slave_Sort_Jobs();
+
+bool SPDC_Compare_Job(const SPDC_HDFS_Job *a, const SPDC_HDFS_Job *b);
+SPDC_HDFS_Job* SPDC_Get_Next_Job();
 
 #endif

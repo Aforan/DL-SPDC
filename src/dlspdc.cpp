@@ -10,7 +10,7 @@
  					per file
 
  			Should make sure all recv protected with probes.
- *
+ *			Need to allow multiple slave processes per machine
  *
  *	NEXT:	Distribute Jobs to slaves.
  *
@@ -33,6 +33,7 @@
 using namespace std;
 
 vector<SPDC_HDFS_Job*> *job_vector;
+vector<SPDC_HDFS_Job*> *done_jobs;
 vector<SPDC_HDFS_File_Info*> *file_info_vector;
 vector<SPDC_HDFS_Host_Chunk_Map*> *locality_vector;
 vector<SPDC_Hostname_Rank*> *slave_hostname_vector;
@@ -272,7 +273,7 @@ int SPDC_Init_MD_Server() {
 		//print_locality_map(locality_vector);
 		//print_jobs(job_vector);
 	}
-
+	SPDC_MD_Server();
 	return 0;
 }
 
@@ -328,9 +329,18 @@ int SPDC_Init_Slave() {
 
 
 	SPDC_Slave_Receive_Init_Jobs();
+	SPDC_Slave_Sort_Jobs();
 	SPDC_Debug_Print_Jobs();
+
+	done_jobs = new vector<SPDC_HDFS_Job*>;
+
 	return 0;
 }
+
+void SPDC_Slave_Sort_Jobs() {
+	sort(job_vector->begin(), job_vector->end(), SPDC_Compare_Job);
+}
+
 
 void SPDC_Slave_Receive_Init_Jobs() {
 	MPI_Status status;
@@ -597,7 +607,50 @@ int SPDC_Build_Initial_Jobs() {
 }
 
 int SPDC_MD_Server() {
-	return 0;
+	MPI_Status status;
+	char msg[200];
+
+	while(1) {
+		MPI_Probe(	MPI_ANY_SOURCE,
+					MPI_ANY_TAG,
+					settings->comm_group,
+					&status);
+	
+		if(status.MPI_TAG == IS_JOB_AVAILABLE) {
+			uint id;
+
+			MPI_Recv(	&id,
+						1,
+						MPI_INT,
+						status.MPI_SOURCE,
+						IS_JOB_AVAILABLE,
+						settings->comm_group,
+						&status);
+
+			if(job_vector->size() > id && (job_vector->at(id)->status == UN_ALLOCATED)) {
+				int r = 1;
+
+				MPI_Send(	&r,
+							1,
+							MPI_INT,
+							status.MPI_SOURCE,
+							JOB_REQUEST_RESPONSE,
+							settings->comm_group);
+
+				job_vector->at(id)->status = ALLOCATED;
+
+			} else {
+				int r = 0;
+
+				MPI_Send(	&r,
+							1,
+							MPI_INT,
+							status.MPI_SOURCE,
+							JOB_REQUEST_RESPONSE,
+							settings->comm_group);
+			}
+		} 
+	}
 }
 
 void SPDC_Distribute_Slave_Jobs() {
@@ -1271,7 +1324,67 @@ void SPDC_Debug_Print_Jobs() {
 		SPDC_Send_Debug_Sequence_Message(msg);
 	}
 
+	sprintf(msg, "Chunks:");
+	SPDC_Send_Debug_Sequence_Message(msg);
+
+	sprintf(msg, "\t[");
+
+	if (slave_info != NULL && slave_info->num_chunks > 0) {
+		for(int i = 0; i < slave_info->num_chunks; i++) {
+			sprintf(msg+strlen(msg), "%d ", slave_info->chunks[i]);
+		}
+		sprintf(msg+strlen(msg)-1, "]");
+	} else {
+		sprintf(msg, "\tNo chunks found");
+	}
+
+	SPDC_Send_Debug_Sequence_Message(msg);
 	SPDC_End_Debug_Sequence();
+}
+
+SPDC_HDFS_Job* SPDC_Get_Next_Job() {
+	SPDC_HDFS_Job* r = NULL;
+	MPI_Status status;
+	int id;
+
+	if(job_vector->size() >= 1) {
+		r = job_vector->at(0);
+		done_jobs->push_back(r);
+		job_vector->erase(job_vector->begin());
+		id = r->id;
+
+		MPI_Send(	&id,
+					1,
+					MPI_INT,
+					md_rank,
+					IS_JOB_AVAILABLE,
+					settings->comm_group);
+
+		MPI_Recv(	&id,
+					1,
+					MPI_INT,
+					md_rank,
+					JOB_REQUEST_RESPONSE,
+					settings->comm_group,
+					&status);
+
+		if(id != 1) {
+			//char msg[200];
+			//sprintf(msg, "Failed on job %d", r->id);
+			//SPDC_Send_Debug_Sequence_Message(msg);
+			r = SPDC_Get_Next_Job();
+		}
+	}
+
+	return r;
+}
+
+bool SPDC_Compare_Job(const SPDC_HDFS_Job *a, const SPDC_HDFS_Job *b) {
+	int a_num_similar, b_num_similar;
+	a_num_similar = num_similar(a->included_chunks, a->num_included_chunks, slave_info->chunks, slave_info->num_chunks);
+	b_num_similar = num_similar(b->included_chunks, b->num_included_chunks, slave_info->chunks, slave_info->num_chunks);
+
+	return a_num_similar > b_num_similar;
 }
 
 #endif

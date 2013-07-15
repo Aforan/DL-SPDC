@@ -154,4 +154,16 @@ SPDC_HDFS_Host_Chunk_Map* get_chunk_map_from_rank(int rank, vector<SPDC_HDFS_Hos
 	return NULL;
 }
 
+int num_similar(int* a, int a_len, int* b, int b_len) {
+	int r = 0;
+	//	Dumb algorithm for now
+	for(int i = 0; i < a_len; i++) {
+		for(int j = 0; j < b_len; j++) {
+			if(a[i] == b[j]) r++;
+		}
+	}
+
+	return r;
+}
+
 #endif
