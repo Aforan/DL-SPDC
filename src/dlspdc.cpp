@@ -10,9 +10,7 @@
  					per file
 
  			Should make sure all recv protected with probes.
- *			Need to allow multiple slave processes per machine
  *
- *	NEXT:	Distribute Jobs to slaves.
  *
  *
  *
@@ -235,37 +233,56 @@ int SPDC_Init_MD_Server() {
 
 	SPDC_Build_Initial_Jobs();
 	SPDC_Build_Locality_Map();
+	
+	//char msg[200];
 
 	//fprintf(stdout, "DEBUG  ---  rank: %d done building\n", our_rank);
 
+	//sprintf(msg, "Distributing locality map");
+	//SPDC_Debug_Message(msg);
 	SPDC_Distribute_Locality_Map();
 
 	//fprintf(stdout, "DEBUG  ---  rank: %d done with distro\n", our_rank);
 
+	//sprintf(msg, "Receiving locality map");
+	//SPDC_Debug_Message(msg);
 	SPDC_Receive_Locality_Map();
 
 	//fprintf(stdout, "DEBUG  ---  rank: %d done receiving other locality maps\n", our_rank);
 
+	//sprintf(msg, "Receiving slave checkins");
+	//SPDC_Debug_Message(msg);
+
 	SPDC_Receive_Slave_Checkins();
 
+
+	//sprintf(msg, "Done Receiving slave checkins");
+	//SPDC_Debug_Message(msg);
 	//fprintf(stdout, "DEBUG  ---  rank: %d done receiving slave checkins\n", our_rank);
 
 	//print_slave_hostname(slave_hostname_vector);
 
 	SPDC_Distribute_Slave_Checkins();
 
+	//sprintf(msg, "Done Distributing slave checkins");
+	//SPDC_Debug_Message(msg);
 	//fprintf(stdout, "DEBUG  ---  rank: %d done distributing slaves\n", our_rank);
 
 	SPDC_Receive_Slave_Checkin_Dist();
+	//sprintf(msg, "Done Receiving slave checkin distribution");
+	//SPDC_Debug_Message(msg);
 
 	//fprintf(stdout, "DEBUG  ---  rank: %d done receiving slave dist\n", our_rank);
 
 	SPDC_Build_Chunk_Job_Map();
-
+	//sprintf(msg, "Done Building Chunk Map");
+	//SPDC_Debug_Message(msg);
 	//fprintf(stdout, "DEBUG  ---  rank: %d done building job chunk map\n", our_rank);
 
 	SPDC_Distribute_Slave_Jobs();
 
+	//sprintf(msg, "Done distributing slave jobs");
+	//SPDC_Debug_Message(msg);
 	//fprintf(stdout, "DEBUG  ---  rank: %d done distributing slave jobs\n", our_rank);
 
 	if(locality_vector->size() > 0 && our_rank == 2) {
@@ -281,19 +298,25 @@ int SPDC_Init_MD_Server() {
 int SPDC_Init_Slave() {
 	//fprintf(stdout, "DEBUG  ---  rank: %d initializing as slave\n", our_rank);
 	char msg[200];
-	sprintf(msg, "Beginning slave Initialization");
-	SPDC_Debug_Message(msg);
+	//sprintf(msg, "Beginning slave Initialization");
+	//SPDC_Debug_Message(msg);
 
 	//	Sort slave ranks and get our position
 	vector<int> sorted_ranks;
 	sorted_ranks.assign(settings->slave_ranks, settings->slave_ranks + settings->num_slaves);
 	sort(sorted_ranks.begin(), sorted_ranks.end());
 	sl_id = find(sorted_ranks.begin(), sorted_ranks.end(), our_rank) - sorted_ranks.begin();
-	
 
 	//	****	THIS NEEDS TO BE FIXED, SHOULD NOT BE DIV (WORKS FOR 2 MD)	****
 	//	Use our position to find the md index we aere asosciated with
-	md_id = sl_id / settings->num_md_servers;
+	int w = settings->num_slaves / settings->num_md_servers;
+
+	md_id = sl_id / w;
+
+	if(md_id >= settings->num_md_servers) md_id = settings->num_md_servers - 1;  
+
+	//sprintf(msg, "MDid = %d", md_id);
+	//SPDC_Debug_Message(msg);
 
 	//	Sort md servers and get our assosciated md rank
 	vector<int> sorted_md_ranks;
@@ -331,7 +354,7 @@ int SPDC_Init_Slave() {
 
 	SPDC_Slave_Receive_Init_Jobs();
 	SPDC_Slave_Sort_Jobs();
-	SPDC_Debug_Print_Jobs();
+	//SPDC_Debug_Print_Jobs();
 
 	done_jobs = new vector<SPDC_HDFS_Job*>;
 
@@ -468,11 +491,12 @@ void SPDC_Build_Chunk_Job_Map() {
 }
 
 void SPDC_Receive_Slave_Checkins() {
-	num_slaves_resp = settings->num_slaves / settings->num_md_servers;
+	int work = settings->num_slaves / settings->num_md_servers;
+	num_slaves_resp = work;
 
 	//	If this is the last md and there is an uneven distribution we'll take it
 	if(	md_id == settings->num_md_servers - 1 && 
-		settings->num_slaves % settings->num_md_servers) num_slaves_resp++;
+		settings->num_slaves % settings->num_md_servers) num_slaves_resp+=settings->num_slaves % settings->num_md_servers;
 
 	//fprintf(stdout, "DEBUG  ---  rank: %d receiving slave checking, responsible for %d slaves\n", our_rank, num_slaves_resp);
 
@@ -482,11 +506,20 @@ void SPDC_Receive_Slave_Checkins() {
 	sort(sorted_slaves.begin(), sorted_slaves.end());
 
 	//	Calculate start and allocate mem for slaves array
-	int start = md_id * num_slaves_resp;
+	int start = md_id * work;
 	slaves = (int*) calloc(num_slaves_resp, sizeof(int));
 	
 	//	Copy into slaves array
 	memcpy(slaves, sorted_slaves.data()+start, sizeof(int)*num_slaves_resp);
+
+	char msg[200];
+	sprintf(msg, "DDD");
+
+	for(int i = 0; i < num_slaves_resp; i++) {
+		sprintf(msg+strlen(msg), "%d ", slaves[i]);
+	}
+
+	SPDC_Debug_Message(msg);
 
 	slave_hostname_vector = new vector<SPDC_Hostname_Rank*>;
 
@@ -509,18 +542,27 @@ void SPDC_Receive_Slave_Checkins() {
 					settings->comm_group,
 					&status);
 
-		//fprintf(stdout, "DEBUG  ---  rank: %d receive checkin from slave %d\n", our_rank, status.MPI_SOURCE);
+		//	If we have already received this hostname, add the rank to the hnr struct
+		if((new_hnr = find_hnr_from_hostname(recv_hostname, slave_hostname_vector)) != NULL) {
+			new_hnr->num_ranks++;
+			int* new_ranks = (int*) calloc(new_hnr->num_ranks, sizeof(int));
+			memcpy(new_ranks, new_hnr->ranks, sizeof(int)*(new_hnr->num_ranks-1));
+			free(new_hnr->ranks);
+			new_hnr->ranks = new_ranks;
+		} else {
+			//	Allocate memory for struct and name
+			new_hnr = (SPDC_Hostname_Rank*) calloc(1, sizeof(SPDC_Hostname_Rank));
+			new_hnr->hostname = (char*) calloc(strlen(recv_hostname)+1, sizeof(char));
+			new_hnr->ranks = (int*) calloc(1, sizeof(int));
+			//	Copy hostname and rank
+			//memcpy(new_hnr, recv_hostname, strlen(recv_hostname)); doesnt work for some reason ...
+			strcpy(new_hnr->hostname, recv_hostname);
 
-		//	Allocate memory for struct and name
-		new_hnr = (SPDC_Hostname_Rank*) calloc(1, sizeof(SPDC_Hostname_Rank));
-		new_hnr->hostname = (char*) calloc(strlen(recv_hostname)+1, sizeof(char));
+			new_hnr->ranks[0] = status.MPI_SOURCE;
+			new_hnr->num_ranks = 1;
 
-		//	Copy hostname and rank
-		//memcpy(new_hnr, recv_hostname, strlen(recv_hostname)); doesnt work for some reason ...
-		strcpy(new_hnr->hostname, recv_hostname);
-		new_hnr->rank = status.MPI_SOURCE;
-
-		slave_hostname_vector->push_back(new_hnr);
+			slave_hostname_vector->push_back(new_hnr);
+		}
 
 		MPI_Send(	&num_done,
 					1,
@@ -607,14 +649,140 @@ int SPDC_Build_Initial_Jobs() {
 	return rc;
 }
 
+int SPDC_Check_Finished() {
+	int flag = 0;
+	int r = 0;
+	MPI_Status status;
+
+	MPI_Iprobe(	MPI_ANY_SOURCE,
+				SLAVE_FINALIZATION,
+				settings->comm_group,
+				&flag,
+				&status);
+
+	while(flag) {
+		int dummy;
+		MPI_Recv(	&dummy,
+					1,
+					MPI_INT,
+					status.MPI_SOURCE,
+					SLAVE_FINALIZATION,
+					settings->comm_group,
+					&status);
+
+		flag = 0;
+		r++;
+
+		MPI_Iprobe(	MPI_ANY_SOURCE,
+					SLAVE_FINALIZATION,
+					settings->comm_group,
+					&flag,
+					&status);
+	}
+
+	return r;
+}
+
+int SPDC_Check_MD_Finished() {
+	int flag = 0;
+	int r = 0;
+	MPI_Status status;
+	
+	MPI_Iprobe(	MPI_ANY_SOURCE,
+				MD_FINALIZATION,
+				settings->comm_group,
+				&flag,
+				&status);
+
+	while(flag) {
+		int dummy;
+		MPI_Recv(	&dummy,
+					1,
+					MPI_INT,
+					status.MPI_SOURCE,
+					MD_FINALIZATION,
+					settings->comm_group,
+					&status);
+
+		flag = 0;
+		r++;
+
+		MPI_Iprobe(	MPI_ANY_SOURCE,
+					MD_FINALIZATION,
+					settings->comm_group,
+					&flag,
+					&status);
+	}
+
+	return r;	
+}
+
 int SPDC_MD_Server() {
 	request_queue = new vector<SPDC_HDFS_Job_Request*>;
+	//char msg[200];
+	int num_done = 0;
+	while(num_done < num_slaves_resp) {
 
-	while(1) {
 		SPDC_Receive_Job_Requests();
+		//sprintf(msg, "Received %u requests", request_queue->size());
+		//SPDC_Debug_Message(msg);
+
 		SPDC_Send_Request_Resolutions();
+		//sprintf(msg, "Sent Request Resolutions");
+		//SPDC_Debug_Message(msg);
+
 		SPDC_Receive_Request_Resolution();
+		//sprintf(msg, "Received resolutions");
+		//SPDC_Debug_Message(msg);
+
 		SPDC_Send_Request_Response();
+		//sprintf(msg, "issued responses");
+		//SPDC_Debug_Message(msg);
+		num_done += SPDC_Check_Finished();
+	}
+
+	num_done = 1;
+	int dummy;
+
+	for(int i = 0; i < settings->num_md_servers; i++) {
+		if(settings->md_ranks[i] != our_rank) {
+			MPI_Send(	&dummy,
+						1,
+						MPI_INT,
+						settings->md_ranks[i],
+						MD_FINALIZATION,
+						settings->comm_group);
+		}
+	}
+
+	while(num_done < settings->num_md_servers) {
+
+		SPDC_Send_Request_Resolutions();
+		//sprintf(msg, "Sent Request Resolutions");
+		//SPDC_Debug_Message(msg);
+
+		SPDC_Receive_Request_Resolution();
+		//sprintf(msg, "Received resolutions");
+		//SPDC_Debug_Message(msg);
+
+		num_done += SPDC_Check_MD_Finished();
+	}
+
+	SPDC_MD_Finalize();
+	fprintf(stderr, "MD %d finalized\n", our_rank);
+	return 0;
+}
+
+void SPDC_MD_Finalize() {
+	int dummy;
+
+	if(settings->debug_mode) {
+		MPI_Send(	&dummy,
+					1,
+					MPI_INT,
+					settings->debug_rank,
+					DEBUG_FINALIZATION,
+					settings->comm_group);
 	}
 }
 
@@ -626,7 +794,12 @@ void SPDC_Send_Request_Response() {
 
 		dummy = 1;
 
-		if(job_vector->at(request->job_id)->status == UN_ALLOCATED) {
+		//char msg[200];
+		//sprintf(msg, "size: %lu, id %d, req %d", job_vector->size(), request->job_id, request->requester);
+		//SPDC_Debug_Message(msg); 
+
+		if(job_vector->at(request->job_id)->status == UN_ALLOCATED &&
+			request->valid) {
 			
 			//char msg[200];
 			//sprintf(msg, "Sending good response to slave %d for job %d", request->requester, request->job_id);
@@ -654,6 +827,7 @@ void SPDC_Send_Request_Response() {
 						settings->comm_group);			
 		}
 
+		free(request);
 	}
 }
 
@@ -752,7 +926,8 @@ void SPDC_Resolve_Request(SPDC_HDFS_Job_Request recv_request) {
 				//SPDC_Debug_Message(msg);
 				
 				job_vector->at(request_queue->at(i)->job_id)->status = ALLOCATED;
-				remove_vector.push_back(request_queue->at(i));
+				request_queue->at(i)->valid = 0;
+				//remove_vector.push_back(request_queue->at(i));
 			}
 
 			found = 1;
@@ -764,13 +939,13 @@ void SPDC_Resolve_Request(SPDC_HDFS_Job_Request recv_request) {
 	if(!found) {
 		job_vector->at(recv_request.job_id)->status = ALLOCATED;
 	}
-
+/*
 	for(uint i = 0; i < remove_vector.size(); i++) {
 		SPDC_HDFS_Job_Request *request = remove_vector.at(i);
 		int dummy = 0;
-		//char msg[200];
-		//sprintf(msg, "Conflicting request from slave %d for job %d", request->requester, request->job_id);
-		//SPDC_Debug_Message(msg);
+		char msg[200];
+		sprintf(msg, "Conflicting request from slave %d for job %d", request->requester, request->job_id);
+		SPDC_Debug_Message(msg);
 
 		MPI_Send(	&dummy,
 					1,
@@ -779,9 +954,12 @@ void SPDC_Resolve_Request(SPDC_HDFS_Job_Request recv_request) {
 					JOB_REQUEST_RESPONSE,
 					settings->comm_group);
 
+
+		//	I think this is causing some problems ...  
 		remove(request_queue->begin(), request_queue->end(), remove_vector.at(i));
 		free(remove_vector.at(i));
 	}
+*/
 }
 
 void SPDC_Receive_Job_Requests() {
@@ -812,6 +990,7 @@ void SPDC_Receive_Job_Requests() {
 				request->requester = status.MPI_SOURCE;
 				request->job_id = id;
 				request->status = UN_ALLOCATED;
+				request->valid = 1;
 
 				request_queue->push_back(request);
 
@@ -889,10 +1068,12 @@ void SPDC_Distribute_Slave_Chunks() {
 	int dummy;
 
 	for(uint i = 0; i < locality_vector->size(); i++) {
-		int slave_rank = get_rank_from_hostname(locality_vector->at(i)->hostname, slave_hostname_vector);
+		int* slave_ranks;
+		int num_ranks = get_ranks_from_hostname(locality_vector->at(i)->hostname, slave_hostname_vector,slave_ranks);
 
-		if(slave_rank >= 0) {
-			locality_vector->at(i)->rank = slave_rank;
+		if(num_ranks != 0) {
+			locality_vector->at(i)->ranks = slave_ranks;			
+			locality_vector->at(i)->num_ranks = num_ranks;
 		}
 		else {
 			continue;
@@ -901,7 +1082,9 @@ void SPDC_Distribute_Slave_Chunks() {
 
 	for(int i = 0; i < num_slaves_resp; i++) {
 		SPDC_HDFS_Host_Chunk_Map* m = get_chunk_map_from_rank(slaves[i], locality_vector);
-
+		char msg[200];
+		sprintf(msg, "Sendin chunks to %d", slaves[i]);
+		SPDC_Debug_Message(msg);
 		if(m == NULL) {
 			MPI_Send(	&dummy,
 						1,
@@ -954,6 +1137,13 @@ void SPDC_Distribute_Slave_Checkins() {
 							settings->md_ranks[j],
 							MD_SLAVE_ASS_DIST_HOSTNAME,
 							settings->comm_group);
+
+				MPI_Send(	temp->ranks,
+							temp->num_ranks,
+							MPI_INT,
+							settings->md_ranks[j],
+							MD_SLAVE_ASS_DIST_RANKS,
+							settings->comm_group);
 			
 				if(i+1 < slave_hostname_vector->size()) {
 					//fprintf(stdout, "DEBUG  ---  rank: %d sending more on slave# %d\n", our_rank, i);
@@ -989,6 +1179,7 @@ void SPDC_Receive_Slave_Checkin_Dist() {
 	for(int i = 0; i < settings->num_md_servers; i++) {
 		if(settings->md_ranks[i] != our_rank) {
 			while(1) {
+
 				MPI_Recv(	recv,
 							sizeof(SPDC_Hostname_Rank),
 							MPI_BYTE,
@@ -1001,12 +1192,21 @@ void SPDC_Receive_Slave_Checkin_Dist() {
 				memcpy(new_hnr, recv, sizeof(SPDC_Hostname_Rank));
 
 				new_hnr->hostname = (char*) calloc(MAX_HOSTNAME_SIZE, sizeof(char));
+				new_hnr->ranks = (int*) calloc(new_hnr->num_ranks, sizeof(int));
 
 				MPI_Recv(	new_hnr->hostname,
 							MAX_HOSTNAME_SIZE,
 							MPI_CHAR,
 							status.MPI_SOURCE,
 							MD_SLAVE_ASS_DIST_HOSTNAME,
+							settings->comm_group,
+							&status);
+
+				MPI_Recv(	new_hnr->ranks,
+							new_hnr->num_ranks,
+							MPI_INT,
+							status.MPI_SOURCE,
+							MD_SLAVE_ASS_DIST_RANKS,
 							settings->comm_group,
 							&status);
 
@@ -1110,45 +1310,71 @@ void SPDC_Receive_Locality_Map() {
 	for(int i = 0; i < settings->num_md_servers; i++) {
 		if(settings->md_ranks[i] != our_rank) {
 			while(1) {
-				MPI_Recv(	recv_map,
-							sizeof(SPDC_HDFS_Host_Chunk_Map),
-							MPI_BYTE,
-							settings->md_ranks[i],
-							MD_LOCALITY_DISTRIBUTION,
-							settings->comm_group,
-							&status);
 
-				SPDC_HDFS_Host_Chunk_Map *new_map = (SPDC_HDFS_Host_Chunk_Map*) calloc(1, sizeof(SPDC_HDFS_Host_Chunk_Map));
-				memcpy(new_map, recv_map, sizeof(SPDC_HDFS_Host_Chunk_Map));
-
-				new_map->hostname = (char*) calloc(MAX_HOSTNAME_SIZE, sizeof(char));
-				new_map->chunks = (int*) calloc(new_map->num_chunks, sizeof(int));
-
-				MPI_Recv(	new_map->hostname,
-							MAX_HOSTNAME_SIZE,
-							MPI_CHAR,
-							status.MPI_SOURCE,
-							MD_LOCALITY_DIST_HOSTNAME,
-							settings->comm_group,
-							&status);
-
-				MPI_Recv(	new_map->chunks,
-							new_map->num_chunks,
-							MPI_INT,
-							status.MPI_SOURCE,
-							MD_LOCALITY_DIST_CHUNKS,
-							settings->comm_group,
-							&status);
-
-				locality_vector->push_back(new_map);
-
-				MPI_Probe(	status.MPI_SOURCE, 
+				MPI_Probe(	settings->md_ranks[i], 
 							MPI_ANY_TAG, 
 							settings->comm_group, 
 							&status);
 
-				if(status.MPI_TAG == MD_LOCALITY_DIST_DONE) {
-					
+				if(status.MPI_TAG != MD_LOCALITY_DIST_DONE) {
+					MPI_Recv(	recv_map,
+								sizeof(SPDC_HDFS_Host_Chunk_Map),
+								MPI_BYTE,
+								settings->md_ranks[i],
+								MD_LOCALITY_DISTRIBUTION,
+								settings->comm_group,
+								&status);
+
+					SPDC_HDFS_Host_Chunk_Map *new_map = (SPDC_HDFS_Host_Chunk_Map*) calloc(1, sizeof(SPDC_HDFS_Host_Chunk_Map));
+					memcpy(new_map, recv_map, sizeof(SPDC_HDFS_Host_Chunk_Map));
+
+					new_map->hostname = (char*) calloc(MAX_HOSTNAME_SIZE, sizeof(char));
+					new_map->chunks = (int*) calloc(new_map->num_chunks, sizeof(int));
+
+					MPI_Recv(	new_map->hostname,
+								MAX_HOSTNAME_SIZE,
+								MPI_CHAR,
+								status.MPI_SOURCE,
+								MD_LOCALITY_DIST_HOSTNAME,
+								settings->comm_group,
+								&status);
+
+					MPI_Recv(	new_map->chunks,
+								new_map->num_chunks,
+								MPI_INT,
+								status.MPI_SOURCE,
+								MD_LOCALITY_DIST_CHUNKS,
+								settings->comm_group,
+								&status);
+
+					locality_vector->push_back(new_map);
+
+					MPI_Probe(	status.MPI_SOURCE, 
+								MPI_ANY_TAG, 
+								settings->comm_group, 
+								&status);
+
+					if(status.MPI_TAG == MD_LOCALITY_DIST_DONE) {
+						
+						MPI_Recv(	&dummy,
+									1,
+									MPI_INT,
+									status.MPI_SOURCE,
+									MD_LOCALITY_DIST_DONE,
+									settings->comm_group,
+									&status);
+
+						break;
+					} else {
+						MPI_Recv(	&dummy,
+									1,
+									MPI_INT,
+									status.MPI_SOURCE,
+									MD_LOCALITY_DIST_MORE,
+									settings->comm_group,
+									&status);					
+					}
+				} else {
 					MPI_Recv(	&dummy,
 								1,
 								MPI_INT,
@@ -1158,17 +1384,8 @@ void SPDC_Receive_Locality_Map() {
 								&status);
 
 					break;
-				} else {
-					MPI_Recv(	&dummy,
-								1,
-								MPI_INT,
-								status.MPI_SOURCE,
-								MD_LOCALITY_DIST_MORE,
-								settings->comm_group,
-								&status);					
 				}
 			}
-
 			//fprintf(stdout, "DEBUG  ---  rank: %d received finalization from %d\n", our_rank, status.MPI_SOURCE);
 		}
 	}
@@ -1209,12 +1426,11 @@ void SPDC_Build_Locality_Map() {
 		}
 	}	
 
-	locality_vector = new vector<SPDC_HDFS_Host_Chunk_Map*>;
-
 	//	Build hostname -> chunk map for files within our offsets.
 	if(file_info_vector->size() <= 0) {
 		//	Do we error here?
 		fprintf(stderr, "No files found\n");
+		hdfsDisconnect(fileSystem);
 		return;
 	}
 
@@ -1391,8 +1607,9 @@ void SPDC_Debug_Server_Init() {
 void SPDC_Debug_Server() {
 	MPI_Status status;
 	int dummy;
+	int num_done = 0;
 
-	while(1) {
+	while(num_done < settings->nthreads - 1) {
 		MPI_Probe(	MPI_ANY_SOURCE, 
 					MPI_ANY_TAG, 
 					settings->comm_group, 
@@ -1476,6 +1693,16 @@ void SPDC_Debug_Server() {
 					break;
 				}
 			}
+		} else if (status.MPI_TAG == DEBUG_FINALIZATION) {
+			MPI_Recv(	&dummy,
+						1,
+						MPI_INT,
+						status.MPI_SOURCE,
+						DEBUG_FINALIZATION,
+						settings->comm_group,
+						&status);
+
+			num_done++;
 		} else {
 			MPI_Recv(	&dummy,	
 						1,
@@ -1564,6 +1791,39 @@ SPDC_HDFS_Job* SPDC_Get_Next_Job() {
 	}
 
 	return r;
+}
+
+void SPDC_Finalize_Slave() {
+	int dummy;
+	MPI_Send(	&dummy,
+				1,
+				MPI_INT,
+				md_rank,
+				SLAVE_FINALIZATION,
+				settings->comm_group);
+
+	if(settings->debug_mode) {
+		MPI_Send(	&dummy,
+					1,
+					MPI_INT,
+					settings->debug_rank,
+					DEBUG_FINALIZATION,
+					settings->comm_group);
+	}
+
+	fprintf(stderr, "Slave %d finalized\n", our_rank);
+}
+
+void SPDC_Send_Debug_Finalization() {
+	int dummy;
+	if(settings->debug_rank) {
+		MPI_Send(	&dummy,
+					1,
+					MPI_INT,
+					settings->debug_rank,
+					DEBUG_FINALIZATION,
+					settings->comm_group);
+	}	
 }
 
 bool SPDC_Compare_Job(const SPDC_HDFS_Job *a, const SPDC_HDFS_Job *b) {

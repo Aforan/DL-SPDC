@@ -1,8 +1,13 @@
 #include "dlspdc.cpp"
 
-const char* const_file = "/tmp/drosoph.nt";
-
 #define READ_TASK 0
+//USEAGE: $ test -nm nummd -ns numslaves -sb slavebegin -se slaveend [-d debugrank]
+
+char* file = NULL;
+int num_md, num_slaves, slave_begin, slave_end, debug_rank, debug_mode;
+
+void validate();
+void parse_args(int argc, char** argv);
 
 int main(int argc, char** argv) {
 	int rank, nthreads;
@@ -13,35 +18,39 @@ int main(int argc, char** argv) {
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &nthreads);
 
-	if(nthreads != 8) {
-		fprintf(stdout, "Nthreads not 8\n");
+	num_md = -1;
+	num_slaves = -1;
+	slave_begin = -1;
+	slave_end = -1;
+	debug_rank = -1;
+	debug_mode = -1;
 
-		MPI_Finalize();
-		return 0;
+	parse_args(argc, argv);
+	validate();
+
+	int* md = (int*) calloc(num_md, sizeof(int));
+
+	for(int i = 0; i < num_md; i++) {
+		md[i] = 1+i;
 	}
 
-	int* md = (int*) calloc(2, sizeof(int));
-	md[0] = 1;
-	md[1] = 2;
-
-	int* sr = (int*) calloc(4, sizeof(int));
-	sr[0] = 3;
-	sr[1] = 4;
-	sr[2] = 5;
-	sr[3] = 6;
+	int* sr = (int*) calloc(num_slaves, sizeof(int));
+	for(int i = 0; i < num_slaves; i++) {
+		sr[i] = slave_begin + i;
+	}
 
 	SPDC_Settings* settings;
 	settings = (SPDC_Settings*) calloc(1, sizeof(SPDC_Settings));
 
 	settings->nthreads = nthreads;
-	settings->num_md_servers = 2;
-	settings->num_slaves = 4;
+	settings->num_md_servers = num_md;
+	settings->num_slaves = num_slaves;
 	settings->master_rank = 0;
 	settings->md_ranks = md;
 	settings->slave_ranks = sr;
 	settings->comm_group = MPI_COMM_WORLD;
-	settings->debug_mode = 1;
-	settings->debug_rank = 7;
+	settings->debug_mode = debug_mode;
+	settings->debug_rank = debug_rank;
 
 	SPDC_Init(settings, rank);
 
@@ -51,24 +60,27 @@ int main(int argc, char** argv) {
 		SPDC_Debug_Message(msg);
 
 		SPDC_HDFS_Job* working_job = (SPDC_HDFS_Job*) calloc(1, sizeof(SPDC_HDFS_Job));
-		char* filename = (char*) calloc(strlen(const_file), sizeof(char));
-		strcpy(filename, const_file);
+		char* filename = (char*) calloc(strlen(file), sizeof(char));
+		strcpy(filename, file);
 
-		for(int i = 0; i < 50; i++) {
+		for(uint64_t i = 0; i < 10; i++) {
 			working_job->id = i;
 			working_job->tag = READ_TASK;
 			working_job->filename = filename;
 			working_job->filename_length = strlen(filename);
-			working_job->start_offset = 5*i*1024*1024;
-			working_job->length = 1024*1024*10;
+			working_job->start_offset = (i*1024*1024);
+			working_job->length = (1024*1024);
 			working_job->status = UN_ALLOCATED;
 
 			SPDC_Register_HDFS_Job(working_job);	
 		}
 
+		free(working_job);
+
 		SPDC_Finalize_Registration();
+		SPDC_Send_Debug_Finalization();
 	} else {
-		if(rank == 3 || rank == 4 || rank == 5 || rank == 6) {
+		if(rank >= slave_begin && rank <= slave_end) {
 			SPDC_HDFS_Job* job;
 			char msg[200];
 
@@ -78,11 +90,31 @@ int main(int argc, char** argv) {
 			while((job = SPDC_Get_Next_Job()) != NULL) {	
 				sprintf(msg, "\tGot next job %d", job->id);
 				SPDC_Send_Debug_Sequence_Message(msg);
-				usleep(1000*10);
+				
+				hdfsFS file_system = hdfsConnect(DEFAULT_FILE_SYSTEM, 0);
+
+			   	hdfsFile hdfs_file = hdfsOpenFile(file_system, job->filename, O_RDONLY, 0, 0, 0);
+			   	
+			   	if(hdfs_file != NULL) {
+					char buf[4096];
+
+				   	uint64_t i;
+
+				   	for(i = 0; i < job->length; i+=4096) {
+				   		hdfsPread(file_system, hdfs_file, job->start_offset+i, buf, 4096);	
+				   	}
+				   	
+				   	//hdfsPread(file_system, hdfs_file, job->start_offset+(i-1), buf, (job->start_offset + job->length) - job->start_offset+(i-1));
+				   	hdfsCloseFile(file_system, hdfs_file);
+			   	}
+
+			   	hdfsDisconnect(file_system);
 			}
 			sprintf(msg, "Ending jobs");
 			SPDC_Send_Debug_Sequence_Message(msg);
 			SPDC_End_Debug_Sequence();
+
+			SPDC_Finalize_Slave();
 		}
 	}
 
@@ -90,4 +122,53 @@ int main(int argc, char** argv) {
 
 	MPI_Finalize();
 	return 0;
+}
+
+//USEAGE: $ test -nm nummd -ns numslaves -sb slavebegin -se slaveend -f file [-d debugrank]
+void parse_args(int argc, char** argv) {
+	int i = 1;
+	while(1) {
+		if(i < argc) {
+			if(!strcmp(argv[i], "-nm")) {
+				num_md = atoi(argv[++i]);
+				++i;
+			} else if(!strcmp(argv[i], "-ns")) {
+				num_slaves = atoi(argv[++i]);
+				++i;
+			} else if(!strcmp(argv[i], "-sb")) {
+				slave_begin = atoi(argv[++i]);
+				++i;
+			} else if(!strcmp(argv[i], "-se")) {
+				slave_end = atoi(argv[++i]);
+				++i;
+			} else if(!strcmp(argv[i], "-d")) {
+				debug_rank = atoi(argv[++i]);
+				debug_mode = 1;
+				++i;
+			} else if(!strcmp(argv[i], "-f")) {
+				file = argv[++i];
+				i++;
+			} else {
+				fprintf(stderr, "invalid useage: $ test -nm nummd -ns numslaves -sb slavebegin -se slaveend -f file [-d debugrank]\n");
+				MPI_Finalize();
+				exit(-1);
+			}			
+		} else break;
+	}
+}
+
+void validate() {
+	int r = (num_md != -1) &
+	 (num_slaves != -1) &
+	 (slave_begin != -1) &
+	 (slave_end != -1) &
+	 (((debug_mode == 1) & debug_rank != -1) |
+	 	debug_mode != 1) &
+	 (file != NULL);
+
+	 if(!r) {
+	 	fprintf(stderr, "Invalid Args\n");
+	 	MPI_Finalize();
+	 	exit(-1);
+	 }
 }
