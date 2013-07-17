@@ -1,4 +1,5 @@
 #include "dlspdc.cpp"
+#include <fstream>
 
 #define READ_TASK 0
 //USEAGE: $ test -nm nummd -ns numslaves -sb slavebegin -se slaveend [-d debugrank]
@@ -83,33 +84,56 @@ int main(int argc, char** argv) {
 		if(rank >= slave_begin && rank <= slave_end) {
 			SPDC_HDFS_Job* job;
 			char msg[200];
+			struct timeval tv;
 
 			//SPDC_Begin_Debug_Sequence();
 			sprintf(msg, "Beginning Jobs");
 			SPDC_Debug_Message(msg);
-			while((job = SPDC_Get_Next_Job(0)) != NULL) {	
+			//hdfsFS file_system = hdfsConnect(DEFAULT_FILE_SYSTEM, 0);
+			//hdfsFile hdfs_file = hdfsOpenFile(file_system, file, O_RDONLY, 0, 0, 0);
+			
+			while((job = SPDC_Get_Next_Job()) != NULL) {	
 				sprintf(msg, "\tGot next job %d", job->id);
 				SPDC_Debug_Message(msg);
-				
-				hdfsFS file_system = hdfsConnect(DEFAULT_FILE_SYSTEM, 0);
-
-			   	hdfsFile hdfs_file = hdfsOpenFile(file_system, job->filename, O_RDONLY, 0, 0, 0);
 			   	
-			   	if(hdfs_file != NULL) {
+			   	ifstream inFile;
+				inFile.open("/tmp/AndrewHDFS/tmp/drosoph64.nt");
+
+			   	if(inFile.is_open()) {
 					char buf[4096];
 
+				   	inFile.seekg(job->start_offset);
+
 				   	uint64_t i;
+					
+					gettimeofday(&tv, NULL);
+					double start_time = (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000 ;
 
 				   	for(i = 0; i < job->length; i+=4096) {
-				   		hdfsPread(file_system, hdfs_file, job->start_offset+i, buf, 4096);	
+				   		//uint64_t len = hdfsPread(file_system, hdfs_file, job->start_offset+i, buf, 4096);	
+				   		//hdfsSeek(file_system, hdfs_file, job->start_offset);
+				   		//hdfsRead(file_system, hdfs_file, buf, 4096);
+				   		inFile.read(buf, 4096);
 				   	}
+
+					gettimeofday(&tv, NULL);
+					double end_time = (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000 ;				   	
+				   	
+					sprintf(msg, "\t\t****Took %f for READ", (end_time - start_time));
+					SPDC_Debug_Message(msg);
+					
+					inFile.close();
 				   	
 				   	//hdfsPread(file_system, hdfs_file, job->start_offset+(i-1), buf, (job->start_offset + job->length) - job->start_offset+(i-1));
-				   	hdfsCloseFile(file_system, hdfs_file);
+			   	} else {
+					sprintf(msg, "\tFile NULL");
+					SPDC_Debug_Message(msg);			   		
 			   	}
-
-			   	hdfsDisconnect(file_system);
 			}
+
+			//hdfsCloseFile(file_system, hdfs_file);
+			//hdfsDisconnect(file_system);
+
 			sprintf(msg, "Ending jobs");
 			SPDC_Debug_Message(msg);
 			//SPDC_End_Debug_Sequence();

@@ -49,7 +49,8 @@ int md_rank;
 int num_slaves_resp;
 int* slaves;
 int debug_sequence_initialized;
-
+int* changed_jobs;
+int num_changed_jobs;
 /*
  *	Debug Flag 0 by Default
  */
@@ -718,7 +719,14 @@ int SPDC_MD_Server() {
 	//SPDC_Debug_Message(msg);
 
 	int num_done = 0;
+	struct timeval  tv;
+	char msg[200];
+
 	while(num_done < num_slaves_resp) {
+		num_changed_jobs = 0;
+
+		gettimeofday(&tv, NULL);
+		double start_time = (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000 ;
 
 		SPDC_Receive_Job_Requests();
 		//sprintf(msg, "Received %u requests", request_queue->size());
@@ -733,9 +741,21 @@ int SPDC_MD_Server() {
 		//SPDC_Debug_Message(msg);
 
 		SPDC_Send_Request_Response();
+		
+		SPDC_Send_Job_Update();
+
 		//sprintf(msg, "issued responses");
 		//SPDC_Debug_Message(msg);
 		num_done += SPDC_Check_Finished();
+
+		gettimeofday(&tv, NULL);
+		double end_time = (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000 ;
+/*
+		if(num_changed_jobs > 0) {
+			sprintf(msg, "\t\t*****Cycle took %f****", (end_time - start_time));
+			SPDC_Debug_Message(msg);
+		}
+*/
 	}
 
 	num_done = 1;
@@ -768,6 +788,27 @@ int SPDC_MD_Server() {
 	SPDC_MD_Finalize();
 	fprintf(stderr, "MD %d finalized\n", our_rank);
 	return 0;
+}
+
+void SPDC_Send_Job_Update() {
+	if(num_changed_jobs > 0) {
+		for(int i = 0; i < num_slaves_resp; i++) {
+			MPI_Send(	&num_changed_jobs,
+						1,
+						MPI_INT,
+						slaves[i],
+						SLAVE_JOB_UPDATE,
+						settings->comm_group);
+
+			MPI_Send(	changed_jobs,
+						num_changed_jobs,
+						MPI_INT,
+						slaves[i],
+						SLAVE_SEND_UPDATED_JOBS,
+						settings->comm_group);
+		}		
+		free(changed_jobs);
+	}
 }
 
 void SPDC_MD_Finalize() {
@@ -809,6 +850,20 @@ void SPDC_Send_Request_Response() {
 						JOB_REQUEST_RESPONSE,
 						settings->comm_group);
 			job_vector->at(request->job_id)->status = ALLOCATED;
+
+			num_changed_jobs++;
+
+			if(num_changed_jobs > 1) {
+				int* new_jobs = (int*) calloc(num_changed_jobs, sizeof(int));
+				memcpy(new_jobs, changed_jobs, sizeof(int)*(num_changed_jobs-1));
+				free(changed_jobs);
+				changed_jobs = new_jobs;
+				new_jobs[num_changed_jobs-1] = job_vector->at(request->job_id)->id;
+			} else {
+				changed_jobs = (int*) calloc(1, sizeof(int));
+				changed_jobs[0] = job_vector->at(request->job_id)->id;
+			}
+
 		} else {
 			dummy = 0;
 			
@@ -924,6 +979,20 @@ void SPDC_Resolve_Request(SPDC_HDFS_Job_Request recv_request) {
 				
 				job_vector->at(request_queue->at(i)->job_id)->status = ALLOCATED;
 				request_queue->at(i)->valid = 0;
+
+				num_changed_jobs++;
+
+				if(num_changed_jobs > 1) {
+					int* new_jobs = (int*) calloc(num_changed_jobs, sizeof(int));
+					memcpy(new_jobs, changed_jobs, sizeof(int)*(num_changed_jobs-1));
+					free(changed_jobs);
+					changed_jobs = new_jobs;
+					new_jobs[num_changed_jobs-1] = request_queue->at(i)->job_id;
+				} else {
+					changed_jobs = (int*) calloc(1, sizeof(int));
+					changed_jobs[0] = request_queue->at(i)->job_id;
+				}
+
 				//remove_vector.push_back(request_queue->at(i));
 			}
 
@@ -935,6 +1004,20 @@ void SPDC_Resolve_Request(SPDC_HDFS_Job_Request recv_request) {
 	//	If we did not find it, set to allocated
 	if(!found) {
 		job_vector->at(recv_request.job_id)->status = ALLOCATED;
+
+		num_changed_jobs++;
+
+		if(num_changed_jobs > 1) {
+			int* new_jobs = (int*) calloc(num_changed_jobs, sizeof(int));
+			memcpy(new_jobs, changed_jobs, sizeof(int)*(num_changed_jobs-1));
+			free(changed_jobs);
+			changed_jobs = new_jobs;
+			new_jobs[num_changed_jobs-1] = recv_request.job_id;
+		} else {
+			changed_jobs = (int*) calloc(1, sizeof(int));
+			changed_jobs[0] = recv_request.job_id;
+		}
+
 	}
 /*
 	for(uint i = 0; i < remove_vector.size(); i++) {
@@ -1764,44 +1847,106 @@ void SPDC_Debug_Print_Jobs() {
 	SPDC_End_Debug_Sequence();
 }
 
-SPDC_HDFS_Job* SPDC_Get_Next_Job(int depth) {
+void SPDC_Update_Jobs() {
+	int flag = 1;
+	MPI_Status status;
+	
+	while(flag) {
+		MPI_Iprobe(	md_rank,
+					SLAVE_JOB_UPDATE,
+					settings->comm_group,
+					&flag,
+					&status);
+
+		if(flag) {
+			int num_update;
+			MPI_Recv(	&num_update,
+						1,
+						MPI_INT,
+						md_rank,
+						SLAVE_JOB_UPDATE,
+						settings->comm_group,
+						&status);
+
+			if(num_update > 0) {
+				int* updated_jobs = (int*) calloc(num_update, sizeof(int));
+
+				MPI_Recv(	updated_jobs,
+							num_update,
+							MPI_INT,
+							md_rank,
+							SLAVE_SEND_UPDATED_JOBS,
+							settings->comm_group,
+							&status);	
+
+
+
+				for(int i = 0; i < num_update; i++) {
+					for(uint j = 0; j < job_vector->size(); j++) {
+						if(job_vector->at(j)->id == updated_jobs[i]) {
+							job_vector->at(j)->status = ALLOCATED;
+						}
+					}
+				}
+
+				free(updated_jobs);		
+			}
+		}
+	}
+}
+
+SPDC_HDFS_Job* SPDC_Get_Next_Job() {
 	SPDC_HDFS_Job* r = NULL;
 	MPI_Status status;
 	int id;
+	int depth = 0;
+	struct timeval tv;
 
-	if(job_vector->size() >= 1) {
-		r = job_vector->at(0);
-		done_jobs->push_back(r);
-		job_vector->erase(job_vector->begin());
-		id = r->id;
+	while(1) {
+		if(job_vector->size() >= 1) {
+			SPDC_Update_Jobs();
 
-		MPI_Send(	&id,
-					1,
-					MPI_INT,
-					md_rank,
-					IS_JOB_AVAILABLE,
-					settings->comm_group);
+			r = job_vector->at(0);
+			done_jobs->push_back(r);
+			job_vector->erase(job_vector->begin());
 
-		MPI_Recv(	&id,
-					1,
-					MPI_INT,
-					md_rank,
-					JOB_REQUEST_RESPONSE,
-					settings->comm_group,
-					&status);
+			if(r->status == UN_ALLOCATED) {
+				id = r->id;
 
-		if(id != 1) {
-			//char msg[200];
-			//sprintf(msg, "Failed on job %d", r->id);
-			//SPDC_Send_Debug_Sequence_Message(msg);
-			r = SPDC_Get_Next_Job(++depth);
-		} else {
-			char msg[200];
-			sprintf(msg, "\tGet job depth = %d", depth);
-			SPDC_Debug_Message(msg);
-		}
+				gettimeofday(&tv, NULL);
+				double start_time = (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000 ;
+				
+				MPI_Send(	&id,
+							1,
+							MPI_INT,
+							md_rank,
+							IS_JOB_AVAILABLE,
+							settings->comm_group);
+
+				MPI_Recv(	&id,
+							1,
+							MPI_INT,
+							md_rank,
+							JOB_REQUEST_RESPONSE,
+							settings->comm_group,
+							&status);
+
+				gettimeofday(&tv, NULL);
+				double end_time = (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000 ;
+				
+				char msg[200];
+				sprintf(msg, "\t\t*****Took %f for Response", (end_time - start_time));
+				SPDC_Debug_Message(msg);
+
+				if(id == 1) {
+					char msg[200];
+					sprintf(msg, "\tGet job depth = %d", depth);
+					SPDC_Debug_Message(msg);
+					break;
+				} else depth++;
+			}
+		} else break;
 	}
-
 
 	return r;
 }

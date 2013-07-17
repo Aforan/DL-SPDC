@@ -56,6 +56,8 @@
 #define SLAVE_FINALIZATION			37
 #define DEBUG_FINALIZATION			38
 #define MD_FINALIZATION				39
+#define SLAVE_SEND_UPDATED_JOBS		40
+#define SLAVE_JOB_UPDATE 			41
 
 #define REGISTERED_STATUS			0
 #define SCHEDULED_STATUS			1
@@ -162,6 +164,8 @@ void SPDC_Receive_Job_Requests();
 void SPDC_Finalize_Slave();
 int SPDC_Check_Finished();
 void SPDC_MD_Finalize();
+void SPDC_Update_Jobs();
+void SPDC_Send_Job_Update();
 
 bool SPDC_Compare_Job(const SPDC_HDFS_Job *a, const SPDC_HDFS_Job *b);
 SPDC_HDFS_Job* SPDC_Get_Next_Job(int depth);
