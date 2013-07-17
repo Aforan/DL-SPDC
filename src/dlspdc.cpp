@@ -12,7 +12,7 @@
  			Should make sure all recv protected with probes.
  *
  *
- *
+ *	Should update slaves with job done data
  *
  *
  *
@@ -230,11 +230,16 @@ int SPDC_Init_MD_Server() {
 	sort(sorted_ranks.begin(), sorted_ranks.end());
 	
 	md_id = find(sorted_ranks.begin(), sorted_ranks.end(), our_rank) - sorted_ranks.begin();
+	//char msg[200];
+
+	//sprintf(msg, "Building Jobs");
+	//SPDC_Debug_Message(msg);
 
 	SPDC_Build_Initial_Jobs();
+	//sprintf(msg, "Bulding locality map");
+	//SPDC_Debug_Message(msg);
+
 	SPDC_Build_Locality_Map();
-	
-	//char msg[200];
 
 	//fprintf(stdout, "DEBUG  ---  rank: %d done building\n", our_rank);
 
@@ -285,12 +290,6 @@ int SPDC_Init_MD_Server() {
 	//SPDC_Debug_Message(msg);
 	//fprintf(stdout, "DEBUG  ---  rank: %d done distributing slave jobs\n", our_rank);
 
-	if(locality_vector->size() > 0 && our_rank == 2) {
-		//print_slave_hostname(slave_hostname_vector);
-		//fprintf(stdout, "Rank: %d printing locality info\n", our_rank);
-		//print_locality_map(locality_vector);
-		//print_jobs(job_vector);
-	}
 	SPDC_MD_Server();
 	return 0;
 }
@@ -488,6 +487,10 @@ void SPDC_Build_Chunk_Job_Map() {
 			job->included_chunks[j] = start_chunk+j;
 		}
 	}
+
+	//char msg[200];
+	fprintf(stdout, "***%d Done build chunk job map\n", our_rank);
+	//SPDC_Debug_Message(msg);
 }
 
 void SPDC_Receive_Slave_Checkins() {
@@ -511,15 +514,6 @@ void SPDC_Receive_Slave_Checkins() {
 	
 	//	Copy into slaves array
 	memcpy(slaves, sorted_slaves.data()+start, sizeof(int)*num_slaves_resp);
-
-	char msg[200];
-	sprintf(msg, "DDD");
-
-	for(int i = 0; i < num_slaves_resp; i++) {
-		sprintf(msg+strlen(msg), "%d ", slaves[i]);
-	}
-
-	SPDC_Debug_Message(msg);
 
 	slave_hostname_vector = new vector<SPDC_Hostname_Rank*>;
 
@@ -720,6 +714,9 @@ int SPDC_Check_MD_Finished() {
 int SPDC_MD_Server() {
 	request_queue = new vector<SPDC_HDFS_Job_Request*>;
 	//char msg[200];
+	//fprintf(stdout, "***%d Beginning server\n", our_rank);
+	//SPDC_Debug_Message(msg);
+
 	int num_done = 0;
 	while(num_done < num_slaves_resp) {
 
@@ -1021,9 +1018,13 @@ void SPDC_Receive_Job_Requests() {
 
 void SPDC_Distribute_Slave_Jobs() {
 	int dummy;
-
+	//char msg[200];
+	//sprintf(msg, "Beginnign chunk dist");
+	//SPDC_Debug_Message(msg);
+	
 	SPDC_Distribute_Slave_Chunks();
-
+	//sprintf(msg, "Done chunk dist");
+	//SPDC_Debug_Message(msg);
 	for(uint i = 0; i < job_vector->size(); i++) {
 		for(int j = 0; j < num_slaves_resp; j++) {
 			SPDC_Send_Slave_Job(job_vector->at(i), slaves[j]);
@@ -1082,9 +1083,7 @@ void SPDC_Distribute_Slave_Chunks() {
 
 	for(int i = 0; i < num_slaves_resp; i++) {
 		SPDC_HDFS_Host_Chunk_Map* m = get_chunk_map_from_rank(slaves[i], locality_vector);
-		char msg[200];
-		sprintf(msg, "Sendin chunks to %d", slaves[i]);
-		SPDC_Debug_Message(msg);
+		
 		if(m == NULL) {
 			MPI_Send(	&dummy,
 						1,
@@ -1396,11 +1395,13 @@ void SPDC_Receive_Locality_Map() {
 void SPDC_Build_Locality_Map() {
 	file_info_vector = new vector<SPDC_HDFS_File_Info*>;
 	SPDC_HDFS_File_Info *working_file_info;
+	char msg[200];
 
 	hdfsFS fileSystem = hdfsConnect(DEFAULT_FILE_SYSTEM, 0);
 
 	if(fileSystem == NULL) {
-		fprintf(stderr, "Could not connect to HDFS\n");
+		sprintf(msg, "Could not connect to HDFS");
+		SPDC_Debug_Message(msg);
 		return;
 	}
 
@@ -1429,7 +1430,8 @@ void SPDC_Build_Locality_Map() {
 	//	Build hostname -> chunk map for files within our offsets.
 	if(file_info_vector->size() <= 0) {
 		//	Do we error here?
-		fprintf(stderr, "No files found\n");
+		sprintf(msg, "No files found");
+		SPDC_Debug_Message(msg);
 		hdfsDisconnect(fileSystem);
 		return;
 	}
@@ -1455,21 +1457,20 @@ void SPDC_Build_Locality_Map() {
 			end_chunk = num_chunks - 1;
 		}
 
-
 		for(uint64_t j = start_chunk; j <= end_chunk; j++) {
+			
 			char*** hosts = hdfsGetHosts(	fileSystem, 
 											file_info_vector->at(i)->filename, 
 											j * file_info_vector->at(i)->chunk_size, 
-											file_info_vector->at(i)->chunk_size);
-
+											1);
 			if(hosts) {
 				int k= 0;
 				while(hosts[k]) {
 					int f = 0;
 					while(hosts[k][f]) {
-
 						//	If this is the first time we have seen this host.
 						if(!contains_host(hosts[k][f], locality_vector)) {
+							
 							//	Allocate some memory for a new locality struct
 							working_locality = (SPDC_HDFS_Host_Chunk_Map*) calloc(1, sizeof(SPDC_HDFS_Host_Chunk_Map));
 							
@@ -1483,23 +1484,30 @@ void SPDC_Build_Locality_Map() {
 							working_locality->chunks[0] = j;
 
 							locality_vector->push_back(working_locality);
-						} else {
+						} else {						
 							//	Get the right locality infor struct
 							working_locality = get_chunk_map(hosts[k][f], locality_vector);
 
-							//	Make a new chunk array (since we need to dynamically resize)
-							int* new_chunks = (int*) calloc(working_locality->num_chunks+1, sizeof(int));
-							memcpy(new_chunks, working_locality->chunks, sizeof(int)*working_locality->num_chunks);
+							if(working_locality != NULL) {
+								//sprintf(msg, "Localty info looks like:\t%s %d", hosts[k][f], working_locality->num_chunks);
+								//SPDC_Debug_Message(msg);							
 
-							//	Set the last chunk
-							new_chunks[working_locality->num_chunks+1] = j;
-							working_locality->num_chunks++;
+								//	Make a new chunk array (since we need to dynamically resize)
+								int* new_chunks = (int*) calloc(working_locality->num_chunks+1, sizeof(int));
+								memcpy(new_chunks, working_locality->chunks, sizeof(int)*working_locality->num_chunks);
 
-							//	Free the old chunk array
-							free(working_locality->chunks);
+								//	Set the last chunk
+								new_chunks[working_locality->num_chunks] = j;
+								working_locality->num_chunks++;
 
-							//	Set the new one
-							working_locality->chunks = new_chunks;
+
+								free(working_locality->chunks);
+
+								//	Set the new one
+								working_locality->chunks = new_chunks;
+							}
+
+
 						}
 
 						++f;
@@ -1600,7 +1608,7 @@ void SPDC_Debug_Message(char* msg) {
 }
 
 void SPDC_Debug_Server_Init() {
-	debug_log = stderr;
+	debug_log = stdout;
 	SPDC_Debug_Server();
 }
 
@@ -1756,7 +1764,7 @@ void SPDC_Debug_Print_Jobs() {
 	SPDC_End_Debug_Sequence();
 }
 
-SPDC_HDFS_Job* SPDC_Get_Next_Job() {
+SPDC_HDFS_Job* SPDC_Get_Next_Job(int depth) {
 	SPDC_HDFS_Job* r = NULL;
 	MPI_Status status;
 	int id;
@@ -1786,9 +1794,14 @@ SPDC_HDFS_Job* SPDC_Get_Next_Job() {
 			//char msg[200];
 			//sprintf(msg, "Failed on job %d", r->id);
 			//SPDC_Send_Debug_Sequence_Message(msg);
-			r = SPDC_Get_Next_Job();
+			r = SPDC_Get_Next_Job(++depth);
+		} else {
+			char msg[200];
+			sprintf(msg, "\tGet job depth = %d", depth);
+			SPDC_Debug_Message(msg);
 		}
 	}
+
 
 	return r;
 }

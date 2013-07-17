@@ -164,6 +164,6 @@ int SPDC_Check_Finished();
 void SPDC_MD_Finalize();
 
 bool SPDC_Compare_Job(const SPDC_HDFS_Job *a, const SPDC_HDFS_Job *b);
-SPDC_HDFS_Job* SPDC_Get_Next_Job();
+SPDC_HDFS_Job* SPDC_Get_Next_Job(int depth);
 
 #endif
