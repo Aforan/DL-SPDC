@@ -7,9 +7,9 @@
  *	
  *	TODO:	Need to add multiple files for locality_vector.
  *			Idea:	Have one vec per file with unique mas structs
- 					per file
-
- 			Should make sure all recv protected with probes.
+ *					per file
+ *
+ *			Should make sure all recv protected with probes.
  *
  *
  *	Should update slaves with job done data
@@ -18,7 +18,6 @@
  *
  *
  *
-
  */
 
 #ifndef DLSPDC_CPP
@@ -36,7 +35,7 @@ vector<SPDC_HDFS_File_Info*> *file_info_vector;
 vector<SPDC_HDFS_Host_Chunk_Map*> *locality_vector;
 vector<SPDC_Hostname_Rank*> *slave_hostname_vector;
 vector<SPDC_HDFS_Job_Request*> *request_queue;
-
+vector<int> *sorted_md_ranks;
 /*
  *	The rank of the process that called init.  We can just
  *	Store it here for later use, simplifying some things.
@@ -55,6 +54,8 @@ int num_changed_jobs;
  *	Debug Flag 0 by Default
  */
  int debug_flag = 0;
+
+ int num_jobs;
 
 /*
  *	Settings used to store number of threads, metadata server ranks
@@ -291,7 +292,19 @@ int SPDC_Init_MD_Server() {
 	//SPDC_Debug_Message(msg);
 	//fprintf(stdout, "DEBUG  ---  rank: %d done distributing slave jobs\n", our_rank);
 
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	double start = (tv.tv_sec) * 1000.0 + (tv.tv_usec) / 1000.0;
+
 	SPDC_MD_Server();
+
+	gettimeofday(&tv, NULL);
+	double end = (tv.tv_sec) * 1000.0 + (tv.tv_usec) / 1000.0;
+
+	char msg[200];
+	sprintf(msg, "MD Server end, took %f", (end - start));
+	SPDC_Debug_Message(msg);
+
 	return 0;
 }
 
@@ -307,23 +320,20 @@ int SPDC_Init_Slave() {
 	sort(sorted_ranks.begin(), sorted_ranks.end());
 	sl_id = find(sorted_ranks.begin(), sorted_ranks.end(), our_rank) - sorted_ranks.begin();
 
-	//	****	THIS NEEDS TO BE FIXED, SHOULD NOT BE DIV (WORKS FOR 2 MD)	****
-	//	Use our position to find the md index we aere asosciated with
 	int w = settings->num_slaves / settings->num_md_servers;
-
 	md_id = sl_id / w;
-
+	
 	if(md_id >= settings->num_md_servers) md_id = settings->num_md_servers - 1;  
 
 	//sprintf(msg, "MDid = %d", md_id);
 	//SPDC_Debug_Message(msg);
 
 	//	Sort md servers and get our assosciated md rank
-	vector<int> sorted_md_ranks;
-	sorted_md_ranks.assign(settings->md_ranks, settings->md_ranks + settings->num_md_servers);
-	sort(sorted_md_ranks.begin(), sorted_md_ranks.end());
+	sorted_md_ranks = new vector<int>;
+	sorted_md_ranks->assign(settings->md_ranks, settings->md_ranks + settings->num_md_servers);
+	sort(sorted_md_ranks->begin(), sorted_md_ranks->end());
 
-	md_rank = sorted_md_ranks.at(md_id);
+	md_rank = sorted_md_ranks->at(md_id);
 
 	//	Send our hostname to owner md
 	char* hostname = (char*) calloc(MAX_HOSTNAME_SIZE, sizeof(char));
@@ -714,30 +724,26 @@ int SPDC_Check_MD_Finished() {
 
 int SPDC_MD_Server() {
 	request_queue = new vector<SPDC_HDFS_Job_Request*>;
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	double start = (tv.tv_sec) * 1000.0 + (tv.tv_usec) / 1000.0;
+	
 	//char msg[200];
 	//fprintf(stdout, "***%d Beginning server\n", our_rank);
 	//SPDC_Debug_Message(msg);
 
 	int num_done = 0;
-	struct timeval  tv;
-	char msg[200];
+	//struct timeval  tv;
+	//char msg[200];
 
 	while(num_done < num_slaves_resp) {
 		num_changed_jobs = 0;
 
-		gettimeofday(&tv, NULL);
-		double start_time = (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000 ;
+		//gettimeofday(&tv, NULL);
+		//double start_time = (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000 ;
 
 		SPDC_Receive_Job_Requests();
 		//sprintf(msg, "Received %u requests", request_queue->size());
-		//SPDC_Debug_Message(msg);
-
-		SPDC_Send_Request_Resolutions();
-		//sprintf(msg, "Sent Request Resolutions");
-		//SPDC_Debug_Message(msg);
-
-		SPDC_Receive_Request_Resolution();
-		//sprintf(msg, "Received resolutions");
 		//SPDC_Debug_Message(msg);
 
 		SPDC_Send_Request_Response();
@@ -748,8 +754,8 @@ int SPDC_MD_Server() {
 		//SPDC_Debug_Message(msg);
 		num_done += SPDC_Check_Finished();
 
-		gettimeofday(&tv, NULL);
-		double end_time = (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000 ;
+		//gettimeofday(&tv, NULL);
+		//double end_time = (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000 ;
 /*
 		if(num_changed_jobs > 0) {
 			sprintf(msg, "\t\t*****Cycle took %f****", (end_time - start_time));
@@ -785,8 +791,15 @@ int SPDC_MD_Server() {
 		num_done += SPDC_Check_MD_Finished();
 	}
 
+	gettimeofday(&tv, NULL);
+	double end = (tv.tv_sec) * 1000.0 + (tv.tv_usec) / 1000.0;
+
+	char msg[200];
+	sprintf(msg, "MD Server end, took %f", (end - start));
+	SPDC_Debug_Message(msg);
+
+
 	SPDC_MD_Finalize();
-	fprintf(stderr, "MD %d finalized\n", our_rank);
 	return 0;
 }
 
@@ -1046,6 +1059,10 @@ void SPDC_Receive_Job_Requests() {
 	MPI_Status status;
 	int flag;
 
+	uint t = (job_vector->size() / settings->num_md_servers);
+	uint low_range = md_id * t;
+	uint high_range = (md_id + 1) * t;
+
 	while(1) {
 
 		MPI_Iprobe(	MPI_ANY_SOURCE,
@@ -1065,7 +1082,9 @@ void SPDC_Receive_Job_Requests() {
 						settings->comm_group,
 						&status);
 
-			if(job_vector->size() > id && (job_vector->at(id)->status == UN_ALLOCATED)) {
+			if(id >= low_range && id < high_range && 
+				job_vector->size() > id && 
+				(job_vector->at(id)->status == UN_ALLOCATED)) {
 				SPDC_HDFS_Job_Request* request = (SPDC_HDFS_Job_Request*) calloc(1, sizeof(SPDC_HDFS_Job_Request));
 				request->requester = status.MPI_SOURCE;
 				request->job_id = id;
@@ -1851,48 +1870,53 @@ void SPDC_Update_Jobs() {
 	int flag = 1;
 	MPI_Status status;
 	
-	while(flag) {
-		MPI_Iprobe(	md_rank,
-					SLAVE_JOB_UPDATE,
-					settings->comm_group,
-					&flag,
-					&status);
+	for(int i = 0; i < settings->num_md_servers; i++) {
+		int this_md = settings->md_ranks[i];
 
-		if(flag) {
-			int num_update;
-			MPI_Recv(	&num_update,
-						1,
-						MPI_INT,
-						md_rank,
+		while(flag) {
+			MPI_Iprobe(	this_md,
 						SLAVE_JOB_UPDATE,
 						settings->comm_group,
+						&flag,
 						&status);
 
-			if(num_update > 0) {
-				int* updated_jobs = (int*) calloc(num_update, sizeof(int));
-
-				MPI_Recv(	updated_jobs,
-							num_update,
+			if(flag) {
+				int num_update;
+				MPI_Recv(	&num_update,
+							1,
 							MPI_INT,
-							md_rank,
-							SLAVE_SEND_UPDATED_JOBS,
+							this_md,
+							SLAVE_JOB_UPDATE,
 							settings->comm_group,
-							&status);	
+							&status);
+
+				if(num_update > 0) {
+					int* updated_jobs = (int*) calloc(num_update, sizeof(int));
+
+					MPI_Recv(	updated_jobs,
+								num_update,
+								MPI_INT,
+								this_md,
+								SLAVE_SEND_UPDATED_JOBS,
+								settings->comm_group,
+								&status);	
 
 
 
-				for(int i = 0; i < num_update; i++) {
-					for(uint j = 0; j < job_vector->size(); j++) {
-						if(job_vector->at(j)->id == updated_jobs[i]) {
-							job_vector->at(j)->status = ALLOCATED;
+					for(int i = 0; i < num_update; i++) {
+						for(uint j = 0; j < job_vector->size(); j++) {
+							if(job_vector->at(j)->id == updated_jobs[i]) {
+								job_vector->at(j)->status = ALLOCATED;
+							}
 						}
 					}
-				}
 
-				free(updated_jobs);		
+					free(updated_jobs);		
+				}
 			}
 		}
 	}
+
 }
 
 SPDC_HDFS_Job* SPDC_Get_Next_Job() {
@@ -1900,9 +1924,13 @@ SPDC_HDFS_Job* SPDC_Get_Next_Job() {
 	MPI_Status status;
 	int id;
 	int depth = 0;
-	struct timeval tv;
+	//struct timeval tv;
 
 	while(1) {
+		if(num_jobs == 0) {
+			num_jobs = job_vector->size();
+		}
+
 		if(job_vector->size() >= 1) {
 			SPDC_Update_Jobs();
 
@@ -1910,38 +1938,52 @@ SPDC_HDFS_Job* SPDC_Get_Next_Job() {
 			done_jobs->push_back(r);
 			job_vector->erase(job_vector->begin());
 
+			unsigned int index = r->id / (num_jobs / settings->num_md_servers);
+			int this_md;
+
+
+			if(index >= 0 && index < sorted_md_ranks->size()) {
+				this_md = sorted_md_ranks->at(index);				
+			} else {
+				continue;
+			}
+
 			if(r->status == UN_ALLOCATED) {
 				id = r->id;
 
-				gettimeofday(&tv, NULL);
-				double start_time = (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000 ;
+				//gettimeofday(&tv, NULL);
+				//double start_time = (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000 ;
 				
 				MPI_Send(	&id,
 							1,
 							MPI_INT,
-							md_rank,
+							this_md,
 							IS_JOB_AVAILABLE,
 							settings->comm_group);
 
 				MPI_Recv(	&id,
 							1,
 							MPI_INT,
-							md_rank,
+							this_md,
 							JOB_REQUEST_RESPONSE,
 							settings->comm_group,
 							&status);
 
-				gettimeofday(&tv, NULL);
-				double end_time = (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000 ;
+				//gettimeofday(&tv, NULL);
+				//double end_time = (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000 ;
 				
-				char msg[200];
-				sprintf(msg, "\t\t*****Took %f for Response", (end_time - start_time));
-				SPDC_Debug_Message(msg);
+				//char msg[200];
+				//sprintf(msg, "\t\t*****Took %f for Response", (end_time - start_time));
+				//SPDC_Debug_Message(msg);
 
 				if(id == 1) {
+					//char msg[200];
+					//sprintf(msg, "\tGet job depth = %d", depth);
+					//SPDC_Debug_Message(msg);
+				
 					char msg[200];
-					sprintf(msg, "\tGet job depth = %d", depth);
-					SPDC_Debug_Message(msg);
+					sprintf(msg, "Got Job %d from md %d", r->id, this_md);
+					SPDC_Send_Debug_Sequence_Message(msg);
 					break;
 				} else depth++;
 			}

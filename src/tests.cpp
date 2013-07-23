@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
 		char* filename = (char*) calloc(strlen(file), sizeof(char));
 		strcpy(filename, file);
 
-		for(uint64_t i = 0; i < 114; i++) {
+		for(uint64_t i = 0; i < 20; i++) {
 			working_job->id = i;
 			working_job->tag = READ_TASK;
 			working_job->filename = filename;
@@ -73,10 +73,30 @@ int main(int argc, char** argv) {
 			working_job->length = (1024*1024*64);
 			working_job->status = UN_ALLOCATED;
 
-			SPDC_Register_HDFS_Job(working_job);	
+			SPDC_Register_HDFS_Job(working_job);			
 		}
 
-		free(working_job);
+
+
+
+/*
+		for(uint64_t i = 0; i < 114; i++) {
+
+			working_job->id = i*10;
+			working_job->tag = READ_TASK;
+			working_job->filename = filename;
+			working_job->filename_length = strlen(filename);
+			working_job->start_offset = (i*1024*1024*64);
+			working_job->length = (1024*1024*64);
+			working_job->status = UN_ALLOCATED;
+
+			for(int j = 0; j < 10; j++) {
+				working_job->id += j;
+				SPDC_Register_HDFS_Job(working_job);
+			}
+		}
+
+*/		free(working_job);
 
 		SPDC_Finalize_Registration();
 		SPDC_Send_Debug_Finalization();
@@ -86,20 +106,20 @@ int main(int argc, char** argv) {
 			char msg[200];
 			struct timeval tv;
 
-			//SPDC_Begin_Debug_Sequence();
+			SPDC_Begin_Debug_Sequence();
 			sprintf(msg, "Beginning Jobs");
-			SPDC_Debug_Message(msg);
+			SPDC_Send_Debug_Sequence_Message(msg);
 			//hdfsFS file_system = hdfsConnect(DEFAULT_FILE_SYSTEM, 0);
 			//hdfsFile hdfs_file = hdfsOpenFile(file_system, file, O_RDONLY, 0, 0, 0);
 			
 			while((job = SPDC_Get_Next_Job()) != NULL) {	
-				sprintf(msg, "\tGot next job %d", job->id);
-				SPDC_Debug_Message(msg);
+				//sprintf(msg, "\tGot next job %d", job->id);
+				//SPDC_Send_Debug_Sequence_Message(msg);
 			   	
-			   	ifstream inFile;
-				inFile.open("/tmp/AndrewHDFS/tmp/drosoph64.nt");
+			   	//ifstream inFile;
+				//inFile.open("/tmp/AndrewHDFS/tmp/drosoph64.nt");
 
-			   	if(inFile.is_open()) {
+			   	/*if(inFile.is_open()) {
 					char buf[4096];
 
 				   	inFile.seekg(job->start_offset);
@@ -107,7 +127,7 @@ int main(int argc, char** argv) {
 				   	uint64_t i;
 					
 					gettimeofday(&tv, NULL);
-					double start_time = (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000 ;
+					double start_time = (tv.tv_sec) * 1000.0 + (tv.tv_usec) / 1000.0 ;
 
 				   	for(i = 0; i < job->length; i+=4096) {
 				   		//uint64_t len = hdfsPread(file_system, hdfs_file, job->start_offset+i, buf, 4096);	
@@ -117,26 +137,30 @@ int main(int argc, char** argv) {
 				   	}
 
 					gettimeofday(&tv, NULL);
-					double end_time = (tv.tv_sec) * 1000 + (tv.tv_usec) / 1000 ;				   	
+					double end_time = (tv.tv_sec) * 1000.0 + (tv.tv_usec) / 1000.0 ;				   	
 				   	
 					sprintf(msg, "\t\t****Took %f for READ", (end_time - start_time));
-					SPDC_Debug_Message(msg);
+					SPDC_Send_Debug_Sequence_Message(msg);
 					
 					inFile.close();
 				   	
 				   	//hdfsPread(file_system, hdfs_file, job->start_offset+(i-1), buf, (job->start_offset + job->length) - job->start_offset+(i-1));
 			   	} else {
 					sprintf(msg, "\tFile NULL");
-					SPDC_Debug_Message(msg);			   		
-			   	}
+					SPDC_Send_Debug_Sequence_Message(msg);			   		
+			   	}*/
+
+				srand(time(NULL));
+				double f =  + ((double)rand() / RAND_MAX) * (0.75);
+				usleep((1250 + (int)(f * 1000)) * 1000);
 			}
 
 			//hdfsCloseFile(file_system, hdfs_file);
 			//hdfsDisconnect(file_system);
 
 			sprintf(msg, "Ending jobs");
-			SPDC_Debug_Message(msg);
-			//SPDC_End_Debug_Sequence();
+			SPDC_Send_Debug_Sequence_Message(msg);
+			SPDC_End_Debug_Sequence();
 
 			SPDC_Finalize_Slave();
 		}
