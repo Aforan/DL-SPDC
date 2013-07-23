@@ -15,9 +15,10 @@
  *	Should update slaves with job done data
  *
  *
- *
- *
- *
+ *	Sim:
+ *	Try and get / distribute all slave checkins
+ *	Select random vals betwwen range of that vec
+ *	Allocate chunks to those slaves / machines
  */
 
 #ifndef DLSPDC_CPP
@@ -44,6 +45,8 @@ int our_rank;
 int md_id;
 int sl_id;
 int md_rank;
+
+int sim_flag = 1;
 
 int num_slaves_resp;
 int* slaves;
@@ -240,6 +243,9 @@ int SPDC_Init_MD_Server() {
 	SPDC_Build_Initial_Jobs();
 	//sprintf(msg, "Bulding locality map");
 	//SPDC_Debug_Message(msg);
+	SPDC_Receive_Slave_Checkins();
+	SPDC_Distribute_Slave_Checkins();
+	SPDC_Receive_Slave_Checkin_Dist();
 
 	SPDC_Build_Locality_Map();
 
@@ -260,7 +266,6 @@ int SPDC_Init_MD_Server() {
 	//sprintf(msg, "Receiving slave checkins");
 	//SPDC_Debug_Message(msg);
 
-	SPDC_Receive_Slave_Checkins();
 
 
 	//sprintf(msg, "Done Receiving slave checkins");
@@ -269,13 +274,11 @@ int SPDC_Init_MD_Server() {
 
 	//print_slave_hostname(slave_hostname_vector);
 
-	SPDC_Distribute_Slave_Checkins();
 
 	//sprintf(msg, "Done Distributing slave checkins");
 	//SPDC_Debug_Message(msg);
 	//fprintf(stdout, "DEBUG  ---  rank: %d done distributing slaves\n", our_rank);
 
-	SPDC_Receive_Slave_Checkin_Dist();
 	//sprintf(msg, "Done Receiving slave checkin distribution");
 	//SPDC_Debug_Message(msg);
 
@@ -291,20 +294,20 @@ int SPDC_Init_MD_Server() {
 	//sprintf(msg, "Done distributing slave jobs");
 	//SPDC_Debug_Message(msg);
 	//fprintf(stdout, "DEBUG  ---  rank: %d done distributing slave jobs\n", our_rank);
-
+/*
 	struct timeval tv;
 	gettimeofday(&tv, NULL);
 	double start = (tv.tv_sec) * 1000.0 + (tv.tv_usec) / 1000.0;
-
+*/
 	SPDC_MD_Server();
-
+/*
 	gettimeofday(&tv, NULL);
 	double end = (tv.tv_sec) * 1000.0 + (tv.tv_usec) / 1000.0;
 
 	char msg[200];
 	sprintf(msg, "MD Server end, took %f", (end - start));
 	SPDC_Debug_Message(msg);
-
+*/
 	return 0;
 }
 
@@ -798,7 +801,6 @@ int SPDC_MD_Server() {
 	sprintf(msg, "MD Server end, took %f", (end - start));
 	SPDC_Debug_Message(msg);
 
-
 	SPDC_MD_Finalize();
 	return 0;
 }
@@ -1120,13 +1122,9 @@ void SPDC_Receive_Job_Requests() {
 
 void SPDC_Distribute_Slave_Jobs() {
 	int dummy;
-	//char msg[200];
-	//sprintf(msg, "Beginnign chunk dist");
-	//SPDC_Debug_Message(msg);
 	
 	SPDC_Distribute_Slave_Chunks();
-	//sprintf(msg, "Done chunk dist");
-	//SPDC_Debug_Message(msg);
+
 	for(uint i = 0; i < job_vector->size(); i++) {
 		for(int j = 0; j < num_slaves_resp; j++) {
 			SPDC_Send_Slave_Job(job_vector->at(i), slaves[j]);
@@ -1169,16 +1167,19 @@ void SPDC_Send_Slave_Job(SPDC_HDFS_Job* job, int slave_rank) {
 
 void SPDC_Distribute_Slave_Chunks() {
 	int dummy;
+	char msg[200];
 
 	for(uint i = 0; i < locality_vector->size(); i++) {
-		int* slave_ranks;
-		int num_ranks = get_ranks_from_hostname(locality_vector->at(i)->hostname, slave_hostname_vector,slave_ranks);
+		//int* slave_ranks;
+		//int num_ranks = get_ranks_from_hostname(locality_vector->at(i)->hostname, slave_hostname_vector, slave_ranks);
+		SPDC_Hostname_Rank *hnr = find_hnr_from_hostname(locality_vector->at(i)->hostname, slave_hostname_vector);
 
-		if(num_ranks != 0) {
-			locality_vector->at(i)->ranks = slave_ranks;			
-			locality_vector->at(i)->num_ranks = num_ranks;
+		if(hnr != NULL) {
+			locality_vector->at(i)->ranks = hnr->ranks;			
+			locality_vector->at(i)->num_ranks = hnr->num_ranks;
 		}
 		else {
+			locality_vector->at(i)->num_ranks = 0;
 			continue;
 		}
 	}
@@ -1347,6 +1348,7 @@ void SPDC_Receive_Slave_Checkin_Dist() {
 
 void SPDC_Distribute_Locality_Map() {
 	SPDC_HDFS_Host_Chunk_Map* temp_map;
+
 	int dummy;
 
 	for(uint i = 0; i < locality_vector->size(); i++) {
@@ -1426,13 +1428,10 @@ void SPDC_Receive_Locality_Map() {
 								settings->comm_group,
 								&status);
 
-					SPDC_HDFS_Host_Chunk_Map *new_map = (SPDC_HDFS_Host_Chunk_Map*) calloc(1, sizeof(SPDC_HDFS_Host_Chunk_Map));
-					memcpy(new_map, recv_map, sizeof(SPDC_HDFS_Host_Chunk_Map));
+					char* hostname = (char*) calloc(MAX_HOSTNAME_SIZE, sizeof(char));
+					int* chunks = (int*) calloc(recv_map->num_chunks, sizeof(int));
 
-					new_map->hostname = (char*) calloc(MAX_HOSTNAME_SIZE, sizeof(char));
-					new_map->chunks = (int*) calloc(new_map->num_chunks, sizeof(int));
-
-					MPI_Recv(	new_map->hostname,
+					MPI_Recv(	hostname,
 								MAX_HOSTNAME_SIZE,
 								MPI_CHAR,
 								status.MPI_SOURCE,
@@ -1440,15 +1439,31 @@ void SPDC_Receive_Locality_Map() {
 								settings->comm_group,
 								&status);
 
-					MPI_Recv(	new_map->chunks,
-								new_map->num_chunks,
+					MPI_Recv(	chunks,
+								recv_map->num_chunks,
 								MPI_INT,
 								status.MPI_SOURCE,
 								MD_LOCALITY_DIST_CHUNKS,
 								settings->comm_group,
 								&status);
 
-					locality_vector->push_back(new_map);
+					SPDC_HDFS_Host_Chunk_Map *existing_map = get_chunk_map(hostname, locality_vector);
+
+					if(existing_map == NULL) {
+						SPDC_HDFS_Host_Chunk_Map *new_map = (SPDC_HDFS_Host_Chunk_Map*) calloc(1, sizeof(SPDC_HDFS_Host_Chunk_Map));
+						memcpy(new_map, recv_map, sizeof(SPDC_HDFS_Host_Chunk_Map));
+						new_map->hostname = hostname;
+						new_map->chunks = chunks;
+						locality_vector->push_back(new_map);
+					} else {
+						existing_map->num_chunks += recv_map->num_chunks;
+						int* new_chunks = (int*) calloc(existing_map->num_chunks, sizeof(int));
+						memcpy(new_chunks, chunks, sizeof(int)*recv_map->num_chunks);
+						memcpy(new_chunks+recv_map->num_chunks, existing_map->chunks, sizeof(int)*(existing_map->num_chunks-recv_map->num_chunks));
+					
+						free(existing_map->chunks);
+						existing_map->chunks = new_chunks;
+					}
 
 					MPI_Probe(	status.MPI_SOURCE, 
 								MPI_ANY_TAG, 
@@ -1494,10 +1509,119 @@ void SPDC_Receive_Locality_Map() {
 	free(recv_map);
 }
 
+void SPDC_Simulate_Chunks() {
+	if(job_vector->size() > 0) {
+		SPDC_HDFS_Job *j = job_vector->at(0);
+		SPDC_HDFS_File_Info *working_file_info = (SPDC_HDFS_File_Info*) calloc(1, sizeof(SPDC_HDFS_File_Info));
+
+		working_file_info->filename = j->filename;
+		working_file_info->size = 1024*1024*64*10;
+		working_file_info->chunk_size = 1024*1024*64;
+		working_file_info->replication_factor = 3;
+
+		file_info_vector->push_back(working_file_info);
+	}
+
+	locality_vector = new vector<SPDC_HDFS_Host_Chunk_Map*>;
+	SPDC_HDFS_Host_Chunk_Map* working_locality;
+
+	for(uint i = 0; i < file_info_vector->size(); i++) {
+
+		//	Determine work partitioning
+		uint64_t num_chunks = file_info_vector->at(i)->size / file_info_vector->at(i)->chunk_size;
+		if (file_info_vector->at(i)->size % file_info_vector->at(i)->chunk_size) num_chunks++;
+
+		uint64_t chunk_partition_size = num_chunks / settings->num_md_servers;
+		chunk_partition_size = (num_chunks < (uint)settings->num_md_servers) ? 1 : chunk_partition_size;
+
+		uint64_t start_chunk = chunk_partition_size * md_id;
+		uint64_t end_chunk = start_chunk + chunk_partition_size - 1;
+
+		if(md_id == settings->num_md_servers - 1) {
+			end_chunk = num_chunks - 1;
+		}
+
+		srand(time(NULL));
+
+		for(uint64_t j = start_chunk; j <= end_chunk; j++) {
+					
+			int a = rand() % settings->num_slaves;
+			int b = rand() % settings->num_slaves;
+			int c = rand() % settings->num_slaves;
+						
+			while(a == b || b == c || a == c) {
+				a =  rand() % settings->num_slaves;
+				b =  rand() % settings->num_slaves;
+				c =  rand() % settings->num_slaves;
+			}
+
+			char **hostnames = (char**) calloc(3, sizeof(char*));
+
+			hostnames[0] = get_hostname_from_rank(settings->slave_ranks[a], slave_hostname_vector);
+			hostnames[1] = get_hostname_from_rank(settings->slave_ranks[b], slave_hostname_vector);
+			hostnames[2] = get_hostname_from_rank(settings->slave_ranks[c], slave_hostname_vector);
+			
+
+			fprintf(stderr, "%d: %s %s %s\n", our_rank, hostnames[0], hostnames[1], hostnames[2]);
+
+			for(int k = 0; k < 3; k++) {
+				if(hostnames[k] == NULL) {
+					continue;
+				}
+
+				//	If this is the first time we have seen this host.
+				if(!contains_host(hostnames[k], locality_vector)) {
+					
+					//	Allocate some memory for a new locality struct
+					working_locality = (SPDC_HDFS_Host_Chunk_Map*) calloc(1, sizeof(SPDC_HDFS_Host_Chunk_Map));
+					
+					//	Set the hostname.
+					working_locality->hostname = (char*) calloc(strlen(hostnames[k]), sizeof(char));
+					strcpy(working_locality->hostname, hostnames[k]);
+					
+					//	Allocate a spot for the chunk index and set it.
+					working_locality->num_chunks = 1;
+					working_locality->chunks = (int*) calloc(1, sizeof(int));
+					working_locality->chunks[0] = j;
+
+					locality_vector->push_back(working_locality);
+				} else {						
+					//	Get the right locality infor struct
+					working_locality = get_chunk_map(hostnames[k], locality_vector);
+
+					if(working_locality != NULL) {
+						//sprintf(msg, "Localty info looks like:\t%s %d", hostnames[k], working_locality->num_chunks);
+						//SPDC_Debug_Message(msg);							
+
+						//	Make a new chunk array (since we need to dynamically resize)
+						int* new_chunks = (int*) calloc(working_locality->num_chunks+1, sizeof(int));
+						memcpy(new_chunks, working_locality->chunks, sizeof(int)*working_locality->num_chunks);
+
+						//	Set the last chunk
+						new_chunks[working_locality->num_chunks] = j;
+						working_locality->num_chunks++;
+
+
+						free(working_locality->chunks);
+
+						//	Set the new one
+						working_locality->chunks = new_chunks;
+					}
+				}
+			}
+		}
+	}
+}
+
 void SPDC_Build_Locality_Map() {
 	file_info_vector = new vector<SPDC_HDFS_File_Info*>;
 	SPDC_HDFS_File_Info *working_file_info;
 	char msg[200];
+
+	if(sim_flag) {
+		SPDC_Simulate_Chunks();
+		return;
+	} 
 
 	hdfsFS fileSystem = hdfsConnect(DEFAULT_FILE_SYSTEM, 0);
 
@@ -2032,6 +2156,18 @@ bool SPDC_Compare_Job(const SPDC_HDFS_Job *a, const SPDC_HDFS_Job *b) {
 	b_num_similar = num_similar(b->included_chunks, b->num_included_chunks, slave_info->chunks, slave_info->num_chunks);
 
 	return a_num_similar > b_num_similar;
+}
+
+void SPDC_Print_Local_Jobs() {
+	char msg[200];
+
+	sprintf(msg, "\tChunks");
+	for(uint i = 0; i < slave_info->num_chunks; i++) {
+		sprintf(msg+strlen(msg), "%d ", slave_info->chunks[i]);	
+	} 
+
+	sprintf(msg+strlen(msg), "\n");
+	SPDC_Debug_Message(msg);
 }
 
 #endif

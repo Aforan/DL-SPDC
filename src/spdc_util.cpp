@@ -150,6 +150,8 @@ int get_ranks_from_hostname(char* hostname, vector<SPDC_Hostname_Rank*> *vec, in
 }
 
 SPDC_HDFS_Host_Chunk_Map* get_chunk_map_from_rank(int rank, vector<SPDC_HDFS_Host_Chunk_Map*> *vec) {
+	if(vec == NULL) return NULL;
+
 	for(uint i = 0; i < vec->size(); i++) {
 		for(int j = 0; j < vec->at(i)->num_ranks; j++) {
 			if(vec->at(i)->ranks[j] == rank) return vec->at(i);
@@ -174,6 +176,16 @@ int num_similar(int* a, int a_len, int* b, int b_len) {
 SPDC_Hostname_Rank* find_hnr_from_hostname(char* hostname, vector<SPDC_Hostname_Rank*> *vec) {
 	for(uint i = 0; i < vec->size(); i++) {
 		if(!strcmp(hostname, vec->at(i)->hostname)) return vec->at(i);
+	}
+
+	return NULL;
+}
+
+char* get_hostname_from_rank(int rank, vector<SPDC_Hostname_Rank*> *vec) {
+	for(uint i = 0; i < vec->size(); i++) {
+		for(int j = 0; j < vec->at(i)->num_ranks; j++) {
+			if(vec->at(i)->ranks[j] == rank) return vec->at(i)->hostname;
+		}
 	}
 
 	return NULL;
